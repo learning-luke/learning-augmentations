@@ -20,9 +20,9 @@ from utils.administration import get_start_epoch, get_best_epoch, parse_args
 ######################################################################################################### Args
 args = parse_args()
 
-debug = True
+debug = False
 if debug:
-    pass
+    args.logit_loss = 1
 
 
 ######################################################################################################### Data
@@ -58,9 +58,11 @@ if not args.resume:
     save_statistics(logs_filepath, "result_summary_statistics",
                     ["epoch",
                      "train_loss",
-                     "test_loss",
                      "train_loss_sim",
+                     "train_loss_reg",
+                     "test_loss",
                      "test_loss_sim",
+                     "test_loss_reg",
                      "train_acc",
                      "test_acc",
                      ],
@@ -83,11 +85,25 @@ if device == 'cuda':
     
 ######################################################################################################### Optimisation
 
+def logit_error(logit_x, logit_y, targets):
+    probs_x = torch.softmax(logit_x, dim=1)
+    probs_y = torch.softmax(logit_y, dim=1)
+    # for i, t in enumerate(targets):
+    #     probs_x[i, t] = 0
+    #     probs_y[i, t] = 0
+    return torch.mean(torch.abs(probs_x - probs_y))
+
+
+
+
 def rms_error(x, y):
     return torch.mean((x - y)**2)
 
 criterion = nn.CrossEntropyLoss()
 criterion_sim = rms_error
+criterion_reg = nn.SmoothL1Loss()
+if args.logit_loss:
+    criterion_sim = logit_error
 optimizer = optim.SGD(net.parameters(), lr=args.learning_rate, momentum=0.9, weight_decay=5e-4)
 
 if args.scheduler == 'CosineAnnealing':
@@ -107,6 +123,7 @@ def train(epoch):
     net.train()
     train_loss = 0
     train_loss_sim = 0
+    train_loss_reg = 0
     correct = 0
     total = 0
     with tqdm.tqdm(initial=0, total=n_train_batches) as train_pbar:
@@ -117,35 +134,46 @@ def train(epoch):
             all_logits, before_paths = net(inputs)
             loss = 0
             loss_sim = 0
+            loss_reg = 0
             num_comparisons = 0
             logits = torch.zeros_like(all_logits[0])
             for pathi in range(args.num_paths):
                 loss += criterion(all_logits[pathi], targets)
                 logits += all_logits[pathi]
+                if args.regularise_mult != 0:
+                    loss_reg += criterion_reg(before_paths[pathi], inputs)
                 for other_pathi in range(pathi+1, args.num_paths):
-                    loss_sim += criterion_sim(before_paths[pathi], before_paths[other_pathi])
+                    if args.logit_loss:
+                        loss_sim += criterion_sim(all_logits[pathi], all_logits[other_pathi], targets)
+                    else:
+                        loss_sim += criterion_sim(before_paths[pathi], before_paths[other_pathi])
                     num_comparisons += 1
 
             logits /= args.num_paths
+            train_loss += loss.item()
             loss_sim = (loss_sim/num_comparisons) * args.sim_loss_mult
             loss += loss_sim
+            if args.regularise_mult != 0:
+                loss += loss_reg
+                train_loss_reg += loss_reg.item()
 
 
             loss.backward()
             optimizer.step()
 
-            train_loss += loss.item()
+
             train_loss_sim += loss_sim.item()
             _, predicted = logits.max(1)
             total += targets.size(0)
             correct += predicted.eq(targets).sum().item()
 
             current_lr = optimizer.param_groups[0]['lr']
-            iter_out = 'Training {};, LR: {:0.5f}, Loss: {:0.4f}, Loss_sim: {:0.4f}, Acc: {:0.4f};'.format(
+            iter_out = 'Training {};, LR: {:0.5f}, Loss: {:0.4f}, Loss_sim: {:0.4f}, Loss_reg: {:0.4f}, Acc: {:0.4f};'.format(
                 batch_idx,
                 current_lr,
                 train_loss / (batch_idx + 1),
                 train_loss_sim / (batch_idx + 1),
+                train_loss_reg / (batch_idx + 1),
                 100. * correct / total,
             )
 
@@ -163,18 +191,19 @@ def train(epoch):
             if batch_idx == 0:
                 save_image_batch("{}/train/{}_inputs.png".format(images_filepath, epoch), inputs)
                 for pathi in range(args.num_paths):
-                    outputs = before_paths[:,3*pathi:3*(pathi+1),:,:]
-                    save_image_batch("{}/train/{}_outputs_{}.png".format(images_filepath, epoch, pathi), inputs)
+                    outputs = before_paths[pathi]
+                    save_image_batch("{}/train/{}_outputs_{}.png".format(images_filepath, epoch, pathi), outputs)
 
 
 
-    return train_loss / n_train_batches, train_loss_sim / n_train_batches, correct / total
+    return train_loss / n_train_batches, train_loss_sim / n_train_batches, train_loss_reg / n_train_batches, correct / total
 
 def test(epoch):
     global best_acc, net
     net.eval()
     test_loss = 0
     test_loss_sim = 0
+    test_loss_reg = 0
     correct = 0
     total = 0
 
@@ -185,28 +214,37 @@ def test(epoch):
             all_logits, before_paths = net(inputs)
             loss = 0
             loss_sim = 0
+            loss_reg = 0
             num_comparisons = 0
             logits = torch.zeros_like(all_logits[0])
             for pathi in range(args.num_paths):
                 loss += criterion(all_logits[pathi], targets)
                 logits += all_logits[pathi]
+                if args.regularise_mult != 0:
+                    loss_reg += criterion_reg(before_paths[pathi], inputs)
                 for other_pathi in range(pathi + 1, args.num_paths):
-                    loss_sim += criterion_sim(before_paths[pathi], before_paths[other_pathi])
+                    if args.logit_loss:
+                        loss_sim += criterion_sim(all_logits[pathi], all_logits[other_pathi], targets)
+                    else:
+                        loss_sim += criterion_sim(before_paths[pathi], before_paths[other_pathi])
                     num_comparisons += 1
 
+            test_loss += loss.item()
             logits /= args.num_paths
             loss_sim = (loss_sim / num_comparisons) * args.sim_loss_mult
             loss += loss_sim
             test_loss_sim += loss_sim.item()
-            test_loss += loss.item()
+            if args.regularise_mult != 0:
+                test_loss_reg += loss_reg.item()
 
             _, predicted = logits.max(1)
             total += targets.size(0)
             correct += predicted.eq(targets).sum().item()
 
-            iter_out = 'Testing; Loss: {:0.4f}, Loss_sim: {:0.4f}, Acc: {:0.4f}'.format(
+            iter_out = 'Testing; Loss: {:0.4f}, Loss_sim: {:0.4f}, Loss_reg: {:0.4f}, Acc: {:0.4f}'.format(
                 test_loss / (batch_idx + 1),
                 test_loss_sim / (batch_idx + 1),
+                test_loss_reg / (batch_idx + 1),
                 100. * correct / total
             )
 
@@ -216,8 +254,8 @@ def test(epoch):
             if batch_idx == 0:
                 save_image_batch("{}/test/{}_inputs.png".format(images_filepath, epoch), inputs)
                 for pathi in range(args.num_paths):
-                    outputs = before_paths[:,3*pathi:3*(pathi+1),:,:]
-                    save_image_batch("{}/test/{}_outputs_{}.png".format(images_filepath, epoch, pathi), inputs)
+                    outputs = before_paths[pathi]
+                    save_image_batch("{}/test/{}_outputs_{}.png".format(images_filepath, epoch, pathi), outputs)
 
         # tensorboard logs (once per epoch)
         steps= epoch*n_train_batches
@@ -226,22 +264,24 @@ def test(epoch):
         for n, v in zip(names, vars):
             writer.add_scalar('test/' + n, v, steps)
 
-    return test_loss / n_test_batches, test_loss_sim / n_test_batches, correct / total
+    return test_loss / n_test_batches, test_loss_sim / n_test_batches, test_loss_reg / n_test_batches, correct / total
 
 if __name__ == "__main__":
     with tqdm.tqdm(initial=start_epoch, total=args.max_epochs) as epoch_pbar:
         for epoch in range(start_epoch, start_epoch + args.max_epochs):
             scheduler.step(epoch=epoch)
 
-            train_loss, train_loss_sim, train_acc = train(epoch)
-            test_loss, test_loss_sim, test_acc = test(epoch)
+            train_loss, train_loss_sim, train_loss_reg, train_acc = train(epoch)
+            test_loss, test_loss_sim, test_loss_reg, test_acc = test(epoch)
 
             save_statistics(logs_filepath, "result_summary_statistics",
                             [epoch,
                              train_loss,
                              train_loss_sim,
+                             train_loss_reg,
                              test_loss,
                              test_loss_sim,
+                             test_loss_reg,
                              train_acc,
                              test_acc])
 

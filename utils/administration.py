@@ -53,14 +53,14 @@ def parse_args():
     parser.add_argument('-s', '--seed', type=int, default=20181002,
                         help='Random seed to use')
     parser.add_argument('-aug', '--data_aug', type=str, nargs='+',
-                        default=['random_h_flip', 'random_crop', 'random_rot_10'],
+                        default=['random_h_flip', 'random_crop'],
                         help='Data augmentation?')
     # logging
     parser.add_argument('-en', '--exp_name', type=str, default='tester',
                         help='Experiment name for the model to be assessed')
     parser.add_argument('-o', '--logs_path', type=str, default='log',
                         help='Directory to save log files, check points, and tensorboard.')
-    parser.add_argument('-resume', '--resume', type=int, default=1,
+    parser.add_argument('-resume', '--resume', type=int, default=0,
                         help='Resume training?')
 
 
@@ -72,6 +72,10 @@ def parse_args():
                         help='Number of paths taken')
     parser.add_argument('-mult', '--sim_loss_mult', type=float, default=-1,
                         help='Base learning rate')
+    parser.add_argument('-logitloss', '--logit_loss', type=int, default=0,
+                        help='MSE loss in logits')
+    parser.add_argument('-regmult', '--regularise_mult', type=float, default=0,
+                        help='Regularise on input')
 
 
 
@@ -94,7 +98,7 @@ def parse_args():
     # optimization
     parser.add_argument('-l', '--learning_rate', type=float, default=0.1,
                         help='Base learning rate')
-    parser.add_argument('-sched', '--scheduler', type=str, default='CosineAnnealing',
+    parser.add_argument('-sched', '--scheduler', type=str, default='MultiStep',
                         help='Scheduler for learning rate annealing: CosineAnnealing | MultiStep')
     parser.add_argument('-mile', '--milestones', type=int, nargs='+', default=[60, 120, 160],
                         help='Multi step scheduler annealing milestones')

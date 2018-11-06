@@ -36,7 +36,7 @@ class PreActBlockUP(nn.Module):
     '''Pre-activation version of the BasicBlock.'''
     expansion = 1
 
-    def __init__(self, in_planes, planes, stride=1, pixelshuffle=True):
+    def __init__(self, in_planes, planes, stride=1, pixelshuffle=True, dropout_p=0.0):
         super(PreActBlockUP, self).__init__()
         self.bn1 = nn.BatchNorm2d(in_planes)
         self.conv1 = nn.Sequential(
@@ -54,7 +54,7 @@ class PreActBlockUP(nn.Module):
                 nn.Conv2d(in_planes//(stride**2), self.expansion*planes, kernel_size=1, stride=1, bias=False)
             ) if pixelshuffle else (nn.ConvTranspose2d(in_planes, planes, kernel_size=4, stride=stride, padding=1, bias=False) if stride > 1
                                 else nn.Conv2d(in_planes, planes, kernel_size=3, stride=stride, padding=1, bias=False))
-
+        self.drop = nn.Dropout2d(dropout_p)
 
     def forward(self, x):
         out = F.relu(self.bn1(x))
@@ -62,7 +62,7 @@ class PreActBlockUP(nn.Module):
         out = self.conv1(out)
         out = self.conv2(F.relu(self.bn2(out)))
         out += shortcut
-
+        out = self.drop(out)
         return out
 
 
@@ -133,21 +133,39 @@ class PreActResNet(nn.Module):
         self.in_planes = 64
         self.num_paths = num_paths
         self.num_classes = num_classes
+        self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         block_up = PreActBottleneckUP if isinstance(block, PreActBottleneck) else PreActBlockUP
-
-        self.before_paths = nn.Sequential(
+        self.dropout_p = 0.3
+        self.path1 = nn.Sequential(
             nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False),
             nn.BatchNorm2d(64),
             nn.ReLU(),
             self._make_layer(block, 64, num_blocks[0], stride=2),
             self._make_layer(block, 128, num_blocks[1], stride=2),
+            self._make_layer(block, 256, num_blocks[2], stride=2),
+            self._make_layer(block_up, 256, num_blocks[2], stride=2),
             self._make_layer(block_up, 128, num_blocks[1], stride=2),
             self._make_layer(block_up, 64, num_blocks[0], stride=2),
-            nn.Conv2d(64, 3*self.num_paths, kernel_size=3, stride=1, padding=1, bias=False),
-            nn.BatchNorm2d(3*self.num_paths),
-            nn.Tanh()
-        )
+            nn.Conv2d(64, 3, kernel_size=3, stride=1, padding=1, bias=False),
+            nn.BatchNorm2d(3),
+            nn.Tanh())
 
+        self.path2 = nn.Sequential(
+            nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False),
+            nn.BatchNorm2d(64),
+            nn.ReLU(),
+            self._make_layer(block, 64, num_blocks[0], stride=2),
+            self._make_layer(block, 128, num_blocks[1], stride=2),
+            self._make_layer(block, 256, num_blocks[2], stride=2),
+            self._make_layer(block_up, 256, num_blocks[2], stride=2),
+            self._make_layer(block_up, 128, num_blocks[1], stride=2),
+            self._make_layer(block_up, 64, num_blocks[0], stride=2),
+            nn.Conv2d(64, 3, kernel_size=3, stride=1, padding=1, bias=False),
+            nn.BatchNorm2d(3),
+            nn.Tanh())
+
+        self.in_planes = 64
+        self.drop = nn.Dropout2d(self.dropout_p)
         self.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
         self.layer1 = self._make_layer(block, 64, num_blocks[0], stride=1)
         self.layer2 = self._make_layer(block, 128, num_blocks[1], stride=2)
@@ -159,15 +177,24 @@ class PreActResNet(nn.Module):
         strides = [stride] + [1]*(num_blocks-1)
         layers = []
         for stride in strides:
-            layers.append(block(self.in_planes, planes, stride))
+            if isinstance(block, PreActBlockUP):
+                layers.append(block(self.in_planes, planes, stride, dropout_p=self.dropout_p))
+            else:
+                layers.append(block(self.in_planes, planes, stride))
             self.in_planes = planes * block.expansion
         return nn.Sequential(*layers)
 
     def forward(self, x):
-        before_paths = self.before_paths(x)
-        all_logits = torch.zeros((self.num_paths, x.size(0), self.num_classes))
+        before_paths = []
+
+        all_logits = torch.zeros((self.num_paths, x.size(0), self.num_classes)).to(self.device)
         for pathi in range(self.num_paths):
-            layer0 = self.conv1(before_paths[:,3*pathi:3*(pathi+1),:,:])
+            if pathi == 0:
+                before_this_path = self.path1(x)
+            else:
+                before_this_path = self.path2(x)
+            before_paths.append(before_this_path)
+            layer0 = self.conv1(self.drop(before_this_path))
             layer1 = self.layer1(layer0)
             layer2 = self.layer2(layer1)
             layer3 = self.layer3(layer2)

@@ -128,7 +128,7 @@ def load_dataset(args):
                                   download=True,
                                   aug=[])
     testloader = torch.utils.data.DataLoader(test_dataset,
-                                             batch_size=args.test_batch_size, shuffle=True)
+                                             batch_size=args.test_batch_size, shuffle=False)
 
     return trainloader, testloader, in_shape
 
