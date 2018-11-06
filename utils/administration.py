@@ -70,13 +70,16 @@ def parse_args():
 
     parser.add_argument('-np', '--num_paths', type=int, default=2,
                         help='Number of paths taken')
+    parser.add_argument('-fc', '--use_fc', type=int, default=0,
+                        help='Use FCs')
     parser.add_argument('-mult', '--sim_loss_mult', type=float, default=-1,
                         help='Base learning rate')
     parser.add_argument('-logitloss', '--logit_loss', type=int, default=0,
                         help='MSE loss in logits')
     parser.add_argument('-regmult', '--regularise_mult', type=float, default=0,
                         help='Regularise on input')
-
+    parser.add_argument('-gs', '--gan_style', type=int, default=0,
+                        help='Gan style')
 
 
 

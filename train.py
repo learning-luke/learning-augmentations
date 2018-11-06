@@ -23,6 +23,8 @@ args = parse_args()
 debug = False
 if debug:
     args.logit_loss = 1
+    args.use_fc = 1
+    args.gan_style = 1
 
 
 ######################################################################################################### Data
@@ -76,7 +78,7 @@ net = ModelSelector(dataset=args.dataset,
                     activation=args.activation,
                     widen_factor=args.widen_factor,
                     num_classes=10,
-                    resdepth=args.resdepth).select(args.model)
+                    resdepth=args.resdepth).select(args.model, args.use_fc)
 
 net = net.to(device)
 if device == 'cuda':
@@ -86,12 +88,14 @@ if device == 'cuda':
 ######################################################################################################### Optimisation
 
 def logit_error(logit_x, logit_y, targets):
-    probs_x = torch.softmax(logit_x, dim=1)
-    probs_y = torch.softmax(logit_y, dim=1)
-    # for i, t in enumerate(targets):
-    #     probs_x[i, t] = 0
-    #     probs_y[i, t] = 0
-    return torch.mean(torch.abs(probs_x - probs_y))
+    sm = nn.Softmax(dim=1)
+    probs_x = sm(logit_x)
+    probs_y = sm(logit_y)
+    mask = torch.ones_like(logit_x)
+    for i, t in enumerate(targets):
+        mask[i, t] = 0
+        mask[i, t] = 0
+    return torch.mean(torch.abs(probs_x - probs_y)[mask==1])
 
 
 
@@ -102,6 +106,7 @@ def rms_error(x, y):
 criterion = nn.CrossEntropyLoss()
 criterion_sim = rms_error
 criterion_reg = nn.SmoothL1Loss()
+BCE_stable = torch.nn.BCEWithLogitsLoss()
 if args.logit_loss:
     criterion_sim = logit_error
 optimizer = optim.SGD(net.parameters(), lr=args.learning_rate, momentum=0.9, weight_decay=5e-4)
@@ -116,6 +121,10 @@ else:
 restore_model(net, optimizer, args)
 writer = SummaryWriter(log_dir=logs_filepath)
 
+
+def onehot(batch, depth=10):
+    ones = torch.eye(depth).to(device)
+    return ones.index_select(0, batch)
 ######################################################################################################### Training
 
 def train(epoch):
@@ -137,19 +146,34 @@ def train(epoch):
             loss_reg = 0
             num_comparisons = 0
             logits = torch.zeros_like(all_logits[0])
-            for pathi in range(args.num_paths):
+            loss += criterion(all_logits[0], targets)
+            for pathi in range(1, args.num_paths+1):
                 loss += criterion(all_logits[pathi], targets)
                 logits += all_logits[pathi]
-                if args.regularise_mult != 0:
-                    loss_reg += criterion_reg(before_paths[pathi], inputs)
-                for other_pathi in range(pathi+1, args.num_paths):
+
+
+                if args.gan_style:
+                    y_pred = all_logits[0]
+                    y_pred_fake = all_logits[pathi]
+                    y = onehot(targets)
+                    y2 = torch.zeros_like(y)
+
+                    # Discriminator loss, relativistic gan
+                    loss_reg += (BCE_stable(y_pred - torch.mean(y_pred_fake), y) + BCE_stable(
+                        y_pred_fake - torch.mean(y_pred), y2)) / 2
+                else:
+                    loss_reg += criterion_reg(before_paths[pathi-1], inputs)
+
+
+                for other_pathi in range(pathi+1, args.num_paths+1):
                     if args.logit_loss:
+
                         loss_sim += criterion_sim(all_logits[pathi], all_logits[other_pathi], targets)
                     else:
-                        loss_sim += criterion_sim(before_paths[pathi], before_paths[other_pathi])
+                        loss_sim += criterion_sim(before_paths[pathi-1], before_paths[other_pathi])
                     num_comparisons += 1
 
-            logits /= args.num_paths
+            logits /= (args.num_paths + 1)
             train_loss += loss.item()
             loss_sim = (loss_sim/num_comparisons) * args.sim_loss_mult
             loss += loss_sim
@@ -189,10 +213,11 @@ def train(epoch):
                     writer.add_scalar('train/'+n, v, steps)
 
             if batch_idx == 0:
-                save_image_batch("{}/train/{}_inputs.png".format(images_filepath, epoch), inputs)
+                ordering = np.argsort(targets.detach().cpu().numpy())
+                save_image_batch("{}/train/{}_inputs.png".format(images_filepath, epoch), inputs[ordering])
                 for pathi in range(args.num_paths):
                     outputs = before_paths[pathi]
-                    save_image_batch("{}/train/{}_outputs_{}.png".format(images_filepath, epoch, pathi), outputs)
+                    save_image_batch("{}/train/{}_outputs_{}.png".format(images_filepath, epoch, pathi), outputs[ordering])
 
 
 
@@ -217,20 +242,35 @@ def test(epoch):
             loss_reg = 0
             num_comparisons = 0
             logits = torch.zeros_like(all_logits[0])
-            for pathi in range(args.num_paths):
+            loss += criterion(all_logits[0], targets)
+            for pathi in range(1, args.num_paths+1):
                 loss += criterion(all_logits[pathi], targets)
                 logits += all_logits[pathi]
-                if args.regularise_mult != 0:
-                    loss_reg += criterion_reg(before_paths[pathi], inputs)
-                for other_pathi in range(pathi + 1, args.num_paths):
+
+
+                if args.gan_style:
+                    y_pred = all_logits[0]
+                    y_pred_fake = all_logits[pathi]
+                    y = onehot(targets)
+                    y2 = torch.zeros_like(y)
+
+                    # Discriminator loss, relativistic gan
+                    loss_reg += (BCE_stable(y_pred - torch.mean(y_pred_fake), y) + BCE_stable(
+                        y_pred_fake - torch.mean(y_pred), y2)) / 2
+                else:
+                    loss_reg += criterion_reg(before_paths[pathi-1], inputs)
+
+
+                for other_pathi in range(pathi+1, args.num_paths+1):
                     if args.logit_loss:
+
                         loss_sim += criterion_sim(all_logits[pathi], all_logits[other_pathi], targets)
                     else:
-                        loss_sim += criterion_sim(before_paths[pathi], before_paths[other_pathi])
+                        loss_sim += criterion_sim(before_paths[pathi-1], before_paths[other_pathi-1])
                     num_comparisons += 1
 
             test_loss += loss.item()
-            logits /= args.num_paths
+            logits /= (args.num_paths + 1)
             loss_sim = (loss_sim / num_comparisons) * args.sim_loss_mult
             loss += loss_sim
             test_loss_sim += loss_sim.item()
@@ -252,10 +292,11 @@ def test(epoch):
             test_pbar.update()
 
             if batch_idx == 0:
-                save_image_batch("{}/test/{}_inputs.png".format(images_filepath, epoch), inputs)
+                ordering = np.argsort(targets.detach().cpu().numpy())
+                save_image_batch("{}/test/{}_inputs.png".format(images_filepath, epoch), inputs[ordering])
                 for pathi in range(args.num_paths):
                     outputs = before_paths[pathi]
-                    save_image_batch("{}/test/{}_outputs_{}.png".format(images_filepath, epoch, pathi), outputs)
+                    save_image_batch("{}/test/{}_outputs_{}.png".format(images_filepath, epoch, pathi), outputs[ordering])
 
         # tensorboard logs (once per epoch)
         steps= epoch*n_train_batches
@@ -268,7 +309,7 @@ def test(epoch):
 
 if __name__ == "__main__":
     with tqdm.tqdm(initial=start_epoch, total=args.max_epochs) as epoch_pbar:
-        for epoch in range(start_epoch, start_epoch + args.max_epochs):
+        for epoch in range(start_epoch, args.max_epochs):
             scheduler.step(epoch=epoch)
 
             train_loss, train_loss_sim, train_loss_reg, train_acc = train(epoch)
