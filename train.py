@@ -22,10 +22,10 @@ args = parse_args()
 
 debug = False
 if debug:
-    args.logit_loss = 1
-    args.use_fc = 1
-    args.gan_style = 1
-
+    args.logit_loss = 0
+    args.learn_cutout = 1
+    # args.use_fc = 1
+    args.upsample_type = 'nearest'
 
 ######################################################################################################### Data
 trainloader, testloader, in_shape = load_dataset(args)
@@ -78,7 +78,7 @@ net = ModelSelector(dataset=args.dataset,
                     activation=args.activation,
                     widen_factor=args.widen_factor,
                     num_classes=10,
-                    resdepth=args.resdepth).select(args.model, args.use_fc)
+                    resdepth=args.resdepth).select(args.model, args.use_fc, args.upsample_type)
 
 net = net.to(device)
 if device == 'cuda':
@@ -99,12 +99,14 @@ def logit_error(logit_x, logit_y, targets):
 
 
 
+def mean_abs_error(x, y):
+    return torch.mean(torch.abs(x-y))
 
 def rms_error(x, y):
     return torch.mean((x - y)**2)
 
 criterion = nn.CrossEntropyLoss()
-criterion_sim = rms_error
+criterion_sim = mean_abs_error
 criterion_reg = nn.SmoothL1Loss()
 BCE_stable = torch.nn.BCEWithLogitsLoss()
 if args.logit_loss:
@@ -127,6 +129,57 @@ def onehot(batch, depth=10):
     return ones.index_select(0, batch)
 ######################################################################################################### Training
 
+def get_loss(inputs, targets):
+    loss = 0
+    loss_sim = 0
+    loss_reg = 0
+    num_comparisons = 0
+
+    if args.learn_cutout:
+        all_logits, before_paths = net(inputs, use_input=False)
+
+
+        logits = torch.zeros_like(all_logits[0])
+        # TODO: learn to combine images?
+
+        loss_reg += criterion_reg(before_paths[0] + before_paths[1], inputs)
+        loss_sim += criterion_sim(before_paths[0], before_paths[1])
+        loss += criterion(all_logits[1], targets)
+        logits += all_logits[1]
+        num_comparisons += 1
+        loss += criterion(all_logits[2], targets)
+        logits += all_logits[2]
+        logits /= 2
+    else:
+        all_logits, before_paths = net(inputs, use_input=True)
+
+        logits = torch.zeros_like(all_logits[0])
+        logits += all_logits[0]
+        loss += criterion(all_logits[0], targets)
+        for pathi in range(1, args.num_paths + 1):
+
+            if args.classify_augmentations:
+                loss += criterion(all_logits[pathi], targets)
+                logits += all_logits[pathi]
+
+            if args.logit_loss:
+                loss_reg += torch.mean((all_logits[0] - all_logits[pathi]) ** 2)
+
+            else:
+                loss_reg += criterion_reg(before_paths[pathi - 1], inputs)
+
+            for other_pathi in range(pathi + 1, args.num_paths + 1):
+                if args.logit_loss:
+                    loss_sim += criterion_sim(all_logits[pathi], all_logits[other_pathi], targets)
+                else:
+                    loss_sim += criterion_sim(before_paths[pathi - 1], before_paths[other_pathi - 1])
+                num_comparisons += 1
+
+        if args.classify_augmentations:
+            logits /= (args.num_paths + 1)
+
+    return before_paths, logits, loss, loss_sim, loss_reg, num_comparisons
+
 def train(epoch):
     global net
     net.train()
@@ -140,40 +193,8 @@ def train(epoch):
             inputs, targets = inputs.to(device), targets.to(device)
             optimizer.zero_grad()
 
-            all_logits, before_paths = net(inputs)
-            loss = 0
-            loss_sim = 0
-            loss_reg = 0
-            num_comparisons = 0
-            logits = torch.zeros_like(all_logits[0])
-            loss += criterion(all_logits[0], targets)
-            for pathi in range(1, args.num_paths+1):
-                loss += criterion(all_logits[pathi], targets)
-                logits += all_logits[pathi]
+            before_paths, logits, loss, loss_sim, loss_reg, num_comparisons = get_loss(inputs, targets)
 
-
-                if args.gan_style:
-                    y_pred = all_logits[0]
-                    y_pred_fake = all_logits[pathi]
-                    y = onehot(targets)
-                    y2 = torch.zeros_like(y)
-
-                    # Discriminator loss, relativistic gan
-                    loss_reg += (BCE_stable(y_pred - torch.mean(y_pred_fake), y) + BCE_stable(
-                        y_pred_fake - torch.mean(y_pred), y2)) / 2
-                else:
-                    loss_reg += criterion_reg(before_paths[pathi-1], inputs)
-
-
-                for other_pathi in range(pathi+1, args.num_paths+1):
-                    if args.logit_loss:
-
-                        loss_sim += criterion_sim(all_logits[pathi], all_logits[other_pathi], targets)
-                    else:
-                        loss_sim += criterion_sim(before_paths[pathi-1], before_paths[other_pathi])
-                    num_comparisons += 1
-
-            logits /= (args.num_paths + 1)
             train_loss += loss.item()
             loss_sim = (loss_sim/num_comparisons) * args.sim_loss_mult
             loss += loss_sim
@@ -236,41 +257,11 @@ def test(epoch):
         for batch_idx, (inputs, targets) in enumerate(testloader):
             inputs, targets = inputs.to(device), targets.to(device)
 
-            all_logits, before_paths = net(inputs)
-            loss = 0
-            loss_sim = 0
-            loss_reg = 0
-            num_comparisons = 0
-            logits = torch.zeros_like(all_logits[0])
-            loss += criterion(all_logits[0], targets)
-            for pathi in range(1, args.num_paths+1):
-                loss += criterion(all_logits[pathi], targets)
-                logits += all_logits[pathi]
-
-
-                if args.gan_style:
-                    y_pred = all_logits[0]
-                    y_pred_fake = all_logits[pathi]
-                    y = onehot(targets)
-                    y2 = torch.zeros_like(y)
-
-                    # Discriminator loss, relativistic gan
-                    loss_reg += (BCE_stable(y_pred - torch.mean(y_pred_fake), y) + BCE_stable(
-                        y_pred_fake - torch.mean(y_pred), y2)) / 2
-                else:
-                    loss_reg += criterion_reg(before_paths[pathi-1], inputs)
-
-
-                for other_pathi in range(pathi+1, args.num_paths+1):
-                    if args.logit_loss:
-
-                        loss_sim += criterion_sim(all_logits[pathi], all_logits[other_pathi], targets)
-                    else:
-                        loss_sim += criterion_sim(before_paths[pathi-1], before_paths[other_pathi-1])
-                    num_comparisons += 1
+            before_paths, logits, loss, loss_sim, loss_reg, num_comparisons = get_loss(inputs, targets)
 
             test_loss += loss.item()
-            logits /= (args.num_paths + 1)
+            if args.classify_augmentations:
+                logits /= (args.num_paths + 1)
             loss_sim = (loss_sim / num_comparisons) * args.sim_loss_mult
             loss += loss_sim
             test_loss_sim += loss_sim.item()

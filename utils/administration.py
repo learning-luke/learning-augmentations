@@ -78,9 +78,14 @@ def parse_args():
                         help='MSE loss in logits')
     parser.add_argument('-regmult', '--regularise_mult', type=float, default=0,
                         help='Regularise on input')
-    parser.add_argument('-gs', '--gan_style', type=int, default=0,
-                        help='Gan style')
 
+    parser.add_argument('-ups', '--upsample_type', type=str, default='pixel',
+                        help='Upsample type for gen')
+    parser.add_argument('-ca', '--classify_augmentations', type=int, default=0,
+                        help='Classify augmentations too?')
+
+    parser.add_argument('-cut', '--learn_cutout', type=int, default=0,
+                        help='Learn the correct cutout?')
 
 
     # model

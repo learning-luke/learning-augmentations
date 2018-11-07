@@ -33,12 +33,13 @@ class ModelSelector():
         self.resdepth = resdepth
         self.in_shape = in_shape
 
-    def select(self, model, path_fc=False):
+    def select(self, model, path_fc=False, upsample='pixel'):
         if model == 'cnn':
             net = SimpleModel(in_shape=self.in_shape,
                               activation=self.activation,
                               num_classes=self.num_classes,
                               filters=self.filters,
+
                               )
         else:
             assert (self.dataset != 'MNIST' and self.dataset != 'Fashion-MNIST'), "Cannot use resnet or densenet for mnist style data"
@@ -68,7 +69,7 @@ class ModelSelector():
                 assert self.resdepth in [10, 18, 34, 50, 101,
                                          152], "Non-standard and unsupported preact resnet depth ({})".format(self.resdepth)
                 if self.resdepth == 10:
-                    net = PreActResNet10(path_fc=path_fc)
+                    net = PreActResNet10(path_fc=path_fc, num_classes=self.num_classes, upsample=upsample)
                 elif self.resdepth == 18:
                     net = PreActResNet18()
                 elif self.resdepth == 34:
