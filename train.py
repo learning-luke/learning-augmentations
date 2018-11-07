@@ -147,9 +147,10 @@ def get_loss(inputs, targets):
         loss += criterion(all_logits[1], targets)
         logits += all_logits[1]
         num_comparisons += 1
-        loss += criterion(all_logits[2], targets)
-        logits += all_logits[2]
-        logits /= 2
+        # TODO: check the effect of removing these lines:
+        # loss += criterion(all_logits[2], targets)
+        # logits += all_logits[2]
+        # logits /= 2
     else:
         all_logits, before_paths = net(inputs, use_input=True)
 
