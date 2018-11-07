@@ -3,7 +3,7 @@ Adapted from: https://github.com/kuangliu/pytorch-cifar/blob/master/main.py,
 and my own work
 '''
 import os
-
+import torch.nn.functional as F
 import numpy as np
 import tqdm
 import torch
@@ -111,16 +111,19 @@ criterion_reg = nn.SmoothL1Loss()
 BCE_stable = torch.nn.BCEWithLogitsLoss()
 if args.logit_loss:
     criterion_sim = logit_error
-optimizer = optim.SGD(net.parameters(), lr=args.learning_rate, momentum=0.9, weight_decay=5e-4)
+optimizer_classifier = optim.SGD([p for name, p in net.named_parameters() if 'path' not in name], lr=args.learning_rate, momentum=0.9, weight_decay=5e-4)
+optimizer_generator = optim.Adam([p for name, p in net.named_parameters() if 'path' in name], lr=0.001)#optim.SGD([p for name, p in net.named_parameters() if 'path' in name], lr=args.learning_rate, momentum=0.9, weight_decay=5e-4)
 
 if args.scheduler == 'CosineAnnealing':
-    scheduler = CosineAnnealingLR(optimizer=optimizer, T_max=args.max_epochs, eta_min=0)
+    scheduler_classifier = CosineAnnealingLR(optimizer=optimizer_classifier, T_max=args.max_epochs, eta_min=0)
+    scheduler_generator = CosineAnnealingLR(optimizer=optimizer_generator, T_max=args.max_epochs, eta_min=0)
 else:
-    scheduler = MultiStepLR(optimizer, milestones=args.milestones, gamma=0.2)
+    scheduler_classifier = MultiStepLR(optimizer_classifier, milestones=args.milestones, gamma=0.2)
+    scheduler_generator = MultiStepLR(optimizer_generator, milestones=args.milestones, gamma=0.2)
 
 ######################################################################################################### Restoring/logging
 
-restore_model(net, optimizer, args)
+restore_model(net, optimizer_classifier, args)
 writer = SummaryWriter(log_dir=logs_filepath)
 
 
@@ -128,6 +131,39 @@ def onehot(batch, depth=10):
     ones = torch.eye(depth).to(device)
     return ones.index_select(0, batch)
 ######################################################################################################### Training
+
+def mixed_cross_entropy_loss(logits, targets1, targets2, alpha):
+    # Check - are they one hot encoded?
+
+    targets = onehot(targets1).float() * alpha + onehot(targets2).float() * (1-alpha)
+
+    logsoftmax = F.log_softmax(logits, dim=1).float()
+
+    cross_entropy = -torch.mean(torch.sum(targets * logsoftmax, dim=1))
+    return cross_entropy
+
+def get_loss2(inputs, targets, alpha_low=0.7, alpha_high=1.0):
+    inputs1 = inputs[:inputs.size(0)//2]
+    inputs2 = inputs[inputs.size(0)//2:]
+    targets1 = targets[:targets.size(0)//2]
+    targets2 = targets[targets.size(0)//2:]
+    alpha = torch.empty(inputs1.size(0), 1).uniform_(alpha_low, alpha_high).to(device)
+
+    all_logits, x_up = net(inputs1, inputs2, alpha)
+    logits_mixed = all_logits[0]
+    logits1 = all_logits[1]
+    logits2 = all_logits[2]
+
+    # loss = mixed_cross_entropy_loss(logits_mixed, targets1, targets2, alpha)
+    loss_c = criterion(logits1, targets1)
+    loss_c += criterion(logits2, targets2)
+
+    loss_g = rms_error(logits_mixed, logits1 * alpha + logits2 * (1-alpha)) * args.regularise_mult
+    # y_pred_fake = logits_mixed
+    # y_pred = logits1 * alpha + logits2 * (1-alpha)
+    # loss_g = (torch.mean(torch.nn.ReLU()(1.0 + (y_pred - torch.mean(y_pred_fake)))) + torch.mean(torch.nn.ReLU()(1.0 - (y_pred_fake - torch.mean(y_pred)))))/2
+    # loss_g += rms_error(logits_mixed, logits2 * (1-alpha)) * args.regularise_mult
+    return logits1, loss_c,loss_g, x_up
 
 def get_loss(inputs, targets):
     loss = 0
@@ -191,28 +227,35 @@ def train(epoch):
     with tqdm.tqdm(initial=0, total=n_train_batches) as train_pbar:
         for batch_idx, (inputs, targets) in enumerate(trainloader):
             inputs, targets = inputs.to(device), targets.to(device)
-            optimizer.zero_grad()
+            optimizer_classifier.zero_grad()
+            optimizer_generator.zero_grad()
 
-            before_paths, logits, loss, loss_sim, loss_reg, num_comparisons = get_loss(inputs, targets)
+            # before_paths, logits, loss, loss_sim, loss_reg, num_comparisons = get_loss(inputs, targets)
+            logits, loss_c, loss_g, x_up = get_loss2(inputs, targets, alpha_low=args.alpha_low, alpha_high=args.alpha_high)
 
-            train_loss += loss.item()
-            loss_sim = (loss_sim/num_comparisons) * args.sim_loss_mult
-            loss += loss_sim
-            if args.regularise_mult != 0:
-                loss += loss_reg
-                train_loss_reg += loss_reg.item()
+            loss_c.backward(retain_graph=True)
+            optimizer_classifier.step()
+            loss_g.backward()
+            optimizer_generator.step()
+
+            train_loss += loss_c.item()
+            train_loss_reg += loss_g.item()
+            # loss_sim = (loss_sim/num_comparisons) * args.sim_loss_mult
+            # loss += loss_sim
+            # if args.regularise_mult != 0:
+            #     loss += loss_reg
+            #     train_loss_reg += loss_reg.item()
 
 
-            loss.backward()
-            optimizer.step()
 
 
-            train_loss_sim += loss_sim.item()
+
+            # train_loss_sim += loss_sim.item()
             _, predicted = logits.max(1)
-            total += targets.size(0)
-            correct += predicted.eq(targets).sum().item()
+            total += targets[:targets.size(0)//2].size(0)
+            correct += predicted.eq(targets[:targets.size(0)//2]).sum().item()
 
-            current_lr = optimizer.param_groups[0]['lr']
+            current_lr = optimizer_classifier.param_groups[0]['lr']
             iter_out = 'Training {};, LR: {:0.5f}, Loss: {:0.4f}, Loss_sim: {:0.4f}, Loss_reg: {:0.4f}, Acc: {:0.4f};'.format(
                 batch_idx,
                 current_lr,
@@ -234,11 +277,10 @@ def train(epoch):
                     writer.add_scalar('train/'+n, v, steps)
 
             if batch_idx == 0:
-                ordering = np.argsort(targets.detach().cpu().numpy())
-                save_image_batch("{}/train/{}_inputs.png".format(images_filepath, epoch), inputs[ordering])
-                for pathi in range(args.num_paths):
-                    outputs = before_paths[pathi]
-                    save_image_batch("{}/train/{}_outputs_{}.png".format(images_filepath, epoch, pathi), outputs[ordering])
+
+                save_image_batch("{}/train/{}_inputs.png".format(images_filepath, epoch), inputs)
+                outputs = torch.cat((x_up, x_up), dim=0)
+                save_image_batch("{}/train/{}_outputs.png".format(images_filepath, epoch), outputs)
 
 
 
@@ -257,20 +299,22 @@ def test(epoch):
         for batch_idx, (inputs, targets) in enumerate(testloader):
             inputs, targets = inputs.to(device), targets.to(device)
 
-            before_paths, logits, loss, loss_sim, loss_reg, num_comparisons = get_loss(inputs, targets)
-
-            test_loss += loss.item()
-            if args.classify_augmentations:
-                logits /= (args.num_paths + 1)
-            loss_sim = (loss_sim / num_comparisons) * args.sim_loss_mult
-            loss += loss_sim
-            test_loss_sim += loss_sim.item()
-            if args.regularise_mult != 0:
-                test_loss_reg += loss_reg.item()
+            # before_paths, logits, loss, loss_sim, loss_reg, num_comparisons = get_loss(inputs, targets)
+            logits, loss_c, loss_g, x_up = get_loss2(inputs, targets, alpha_low=0.99, alpha_high=1)
+            test_loss_reg += loss_g.item()
+            targets = targets
+            test_loss += loss_c.item()
+            # if args.classify_augmentations:
+            #     logits /= (args.num_paths + 1)
+            # loss_sim = (loss_sim / num_comparisons) * args.sim_loss_mult
+            # loss += loss_sim
+            # test_loss_sim += loss_sim.item()
+            # if args.regularise_mult != 0:
+            #     test_loss_reg += loss_reg.item()
 
             _, predicted = logits.max(1)
-            total += targets.size(0)
-            correct += predicted.eq(targets).sum().item()
+            total += targets[:targets.size(0)//2].size(0)
+            correct += predicted.eq(targets[:targets.size(0)//2]).sum().item()
 
             iter_out = 'Testing; Loss: {:0.4f}, Loss_sim: {:0.4f}, Loss_reg: {:0.4f}, Acc: {:0.4f}'.format(
                 test_loss / (batch_idx + 1),
@@ -283,11 +327,10 @@ def test(epoch):
             test_pbar.update()
 
             if batch_idx == 0:
-                ordering = np.argsort(targets.detach().cpu().numpy())
-                save_image_batch("{}/test/{}_inputs.png".format(images_filepath, epoch), inputs[ordering])
-                for pathi in range(args.num_paths):
-                    outputs = before_paths[pathi]
-                    save_image_batch("{}/test/{}_outputs_{}.png".format(images_filepath, epoch, pathi), outputs[ordering])
+
+                save_image_batch("{}/test/{}_inputs.png".format(images_filepath, epoch), inputs)
+                outputs = torch.cat((x_up, x_up), dim=0)
+                save_image_batch("{}/test/{}_outputs.png".format(images_filepath, epoch), outputs)
 
         # tensorboard logs (once per epoch)
         steps= epoch*n_train_batches
@@ -301,7 +344,8 @@ def test(epoch):
 if __name__ == "__main__":
     with tqdm.tqdm(initial=start_epoch, total=args.max_epochs) as epoch_pbar:
         for epoch in range(start_epoch, args.max_epochs):
-            scheduler.step(epoch=epoch)
+            scheduler_classifier.step(epoch=epoch)
+            scheduler_generator.step(epoch=epoch)
 
             train_loss, train_loss_sim, train_loss_reg, train_acc = train(epoch)
             test_loss, test_loss_sim, test_loss_reg, test_acc = test(epoch)
@@ -328,7 +372,7 @@ if __name__ == "__main__":
             state = {
                 'epoch': epoch,
                 'net': net.state_dict(),
-                'optimizer': optimizer.state_dict(),
+                'optimizer': optimizer_classifier.state_dict(),
             }
             epoch_pbar.set_description('Saving at {}/{}_checkpoint.pth.tar'.format(saved_models_filepath, epoch))
             filename = '{}_checkpoint.pth.tar'.format(epoch)

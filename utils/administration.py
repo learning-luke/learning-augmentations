@@ -79,6 +79,11 @@ def parse_args():
     parser.add_argument('-regmult', '--regularise_mult', type=float, default=0,
                         help='Regularise on input')
 
+    parser.add_argument('-ahigh', '--alpha_high', type=float, default=0.7,
+                        help='Alpha high')
+    parser.add_argument('-alow', '--alpha_low', type=float, default=1,
+                        help='Alpha low')
+
     parser.add_argument('-ups', '--upsample_type', type=str, default='pixel',
                         help='Upsample type for gen')
     parser.add_argument('-ca', '--classify_augmentations', type=int, default=0,

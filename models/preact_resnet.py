@@ -172,17 +172,18 @@ class PreActResNet(nn.Module):
                 self._make_layer(block, 64, num_blocks[0], stride=1),
                 self._make_layer(block, 128, num_blocks[1], stride=2),
                 self._make_layer(block, 256, num_blocks[2], stride=2),
-                self._make_layer(block, 512, num_blocks[2], stride=2),
+                self._make_layer(block, 512, num_blocks[2], stride=2),)
 
 
-                self._make_layer(block_up, 512, num_blocks[2], stride=2),
-                self._make_layer(block_up, 256, num_blocks[2], stride=2),
-                self._make_layer(block_up, 128, num_blocks[1], stride=2),
-                self._make_layer(block_up, 64, num_blocks[0], stride=1),
-                nn.Conv2d(64, 3, kernel_size=3, stride=1, padding=1, bias=False),
-                nn.BatchNorm2d(3),
-                nn.Tanh())
+                # self._make_layer(block_up, 512, num_blocks[2], stride=2),
+                # self._make_layer(block_up, 256, num_blocks[2], stride=2),
+                # self._make_layer(block_up, 128, num_blocks[1], stride=2),
+                # self._make_layer(block_up, 64, num_blocks[0], stride=1),
+                # nn.Conv2d(64, 3, kernel_size=3, stride=1, padding=1, bias=False),
+                # nn.BatchNorm2d(3),
+                # nn.Tanh())
 
+            self.in_planes = 64
             self.path2 = nn.Sequential(
                 nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False),
                 nn.BatchNorm2d(64),
@@ -190,14 +191,24 @@ class PreActResNet(nn.Module):
                 self._make_layer(block, 64, num_blocks[0], stride=1),
                 self._make_layer(block, 128, num_blocks[1], stride=2),
                 self._make_layer(block, 256, num_blocks[2], stride=2),
-                self._make_layer(block, 512, num_blocks[2], stride=2),
-                self._make_layer(block_up, 512, num_blocks[2], stride=2),
-                self._make_layer(block_up, 256, num_blocks[2], stride=2),
-                self._make_layer(block_up, 128, num_blocks[1], stride=2),
-                self._make_layer(block_up, 64, num_blocks[0], stride=1),
-                nn.Conv2d(64, 3, kernel_size=3, stride=1, padding=1, bias=False),
-                nn.BatchNorm2d(3),
-                nn.Tanh())
+                self._make_layer(block, 512, num_blocks[2], stride=2),)
+                # self._make_layer(block_up, 512, num_blocks[2], stride=2),
+                # self._make_layer(block_up, 256, num_blocks[2], stride=2),
+                # self._make_layer(block_up, 128, num_blocks[1], stride=2),
+                # self._make_layer(block_up, 64, num_blocks[0], stride=1),
+                # nn.Conv2d(64, 3, kernel_size=3, stride=1, padding=1, bias=False),
+                # nn.BatchNorm2d(3),
+                # nn.Tanh())
+            self.path_up = nn.Sequential(self._make_layer(block_up, 512, num_blocks[2], stride=4),
+                                         self._make_layer(block_up, 512, num_blocks[2], stride=2),
+                                         self._make_layer(block_up, 256, num_blocks[2], stride=2),
+                                         self._make_layer(block_up, 128, num_blocks[1], stride=2),
+                                         self._make_layer(block_up, 64, num_blocks[0], stride=1),
+                                         nn.Conv2d(64, 3, kernel_size=3, stride=1, padding=1, bias=False),
+                                         nn.BatchNorm2d(3),
+                                         nn.Tanh())
+
+
 
         self.in_planes = 64
         self.drop = nn.Dropout2d(self.dropout_p)
@@ -219,52 +230,97 @@ class PreActResNet(nn.Module):
             self.in_planes = planes * block.expansion
         return nn.Sequential(*layers)
 
-    def forward(self, x, use_input=True):
+    def forward(self, x1, x2, alpha=0.5, use_input=True):
+        # assert alpha >= 0 and alpha <= 1, "Alpha must be in range [0, 1]"
         before_paths = []
 
-        all_logits = torch.zeros((self.num_paths+1, x.size(0), self.num_classes)).to(self.device)
-        if use_input:
-            layer0 = self.conv1(x)
-            layer1 = self.layer1(layer0)
-            layer2 = self.layer2(layer1)
-            layer3 = self.layer3(layer2)
-            layer4 = self.layer4(layer3)
-            pool = F.avg_pool2d(layer4, 4)
-            pool = pool.view(pool.size(0), -1)
-            logits = self.linear(pool)
-            all_logits[0] = logits
+        path1 = self.path1(x1)
+        pool1 = F.avg_pool2d(path1, 4)
+        pool1 = pool1.view(pool1.size(0), -1)
 
-        for pathi in range(self.num_paths):
-            if pathi == 0:
-                if self.path_fc:
-                    x_view = x.shape
-                    x_ready = x.view(x.size(0), -1)
-                else:
-                    x_ready = x
-                before_this_path = self.path1(x_ready)
-                if self.path_fc:
-                    before_this_path = before_this_path.view(x_view)
-            else:
-                if self.path_fc:
-                    x_view = x.shape
-                    x_ready = x.view(x.size(0), -1)
-                else:
-                    x_ready = x
-                before_this_path = self.path2(x_ready)
-                if self.path_fc:
-                    before_this_path = before_this_path.view(x_view)
-            before_paths.append(before_this_path)
-            layer0 = self.conv1(self.drop(before_this_path))
-            layer1 = self.layer1(layer0)
-            layer2 = self.layer2(layer1)
-            layer3 = self.layer3(layer2)
-            layer4 = self.layer4(layer3)
-            pool = F.avg_pool2d(layer4, 4)
-            pool = pool.view(pool.size(0), -1)
-            logits = self.linear(pool)
-            all_logits[pathi+1] = logits
+        path2 = self.path2(x2)
+        pool2 = F.avg_pool2d(path2, 4)
+        pool2 = pool2.view(pool2.size(0), -1)
 
-        return all_logits, before_paths
+        pool_avg = pool1 * alpha + pool2 * (1-alpha)
+
+        x_up = self.path_up(pool_avg.view(pool_avg.size(0), pool_avg.size(1), 1, 1))
+
+        all_logits = torch.zeros((3, x1.size(0), self.num_classes)).to(self.device)
+
+        layer0 = self.conv1(x_up)
+        layer1 = self.layer1(layer0)
+        layer2 = self.layer2(layer1)
+        layer3 = self.layer3(layer2)
+        layer4 = self.layer4(layer3)
+        pool = F.avg_pool2d(layer4, 4)
+        pool = pool.view(pool.size(0), -1)
+        logits = self.linear(pool)
+        all_logits[0] = logits
+
+        layer0 = self.conv1(x1)
+        layer1 = self.layer1(layer0)
+        layer2 = self.layer2(layer1)
+        layer3 = self.layer3(layer2)
+        layer4 = self.layer4(layer3)
+        pool = F.avg_pool2d(layer4, 4)
+        pool = pool.view(pool.size(0), -1)
+        logits = self.linear(pool)
+        all_logits[1] = logits
+
+        layer0 = self.conv1(x2)
+        layer1 = self.layer1(layer0)
+        layer2 = self.layer2(layer1)
+        layer3 = self.layer3(layer2)
+        layer4 = self.layer4(layer3)
+        pool = F.avg_pool2d(layer4, 4)
+        pool = pool.view(pool.size(0), -1)
+        logits = self.linear(pool)
+        all_logits[2] = logits
+
+        # all_logits = torch.zeros((self.num_paths+1, x.size(0), self.num_classes)).to(self.device)
+        # if use_input:
+        #     layer0 = self.conv1(x)
+        #     layer1 = self.layer1(layer0)
+        #     layer2 = self.layer2(layer1)
+        #     layer3 = self.layer3(layer2)
+        #     layer4 = self.layer4(layer3)
+        #     pool = F.avg_pool2d(layer4, 4)
+        #     pool = pool.view(pool.size(0), -1)
+        #     logits = self.linear(pool)
+        #     all_logits[0] = logits
+        #
+        # for pathi in range(self.num_paths):
+        #     if pathi == 0:
+        #         if self.path_fc:
+        #             x_view = x.shape
+        #             x_ready = x.view(x.size(0), -1)
+        #         else:
+        #             x_ready = x
+        #         before_this_path = self.path1(x_ready)
+        #         if self.path_fc:
+        #             before_this_path = before_this_path.view(x_view)
+        #     else:
+        #         if self.path_fc:
+        #             x_view = x.shape
+        #             x_ready = x.view(x.size(0), -1)
+        #         else:
+        #             x_ready = x
+        #         before_this_path = self.path2(x_ready)
+        #         if self.path_fc:
+        #             before_this_path = before_this_path.view(x_view)
+        #     before_paths.append(before_this_path)
+        #     layer0 = self.conv1(self.drop(before_this_path))
+        #     layer1 = self.layer1(layer0)
+        #     layer2 = self.layer2(layer1)
+        #     layer3 = self.layer3(layer2)
+        #     layer4 = self.layer4(layer3)
+        #     pool = F.avg_pool2d(layer4, 4)
+        #     pool = pool.view(pool.size(0), -1)
+        #     logits = self.linear(pool)
+        #     all_logits[pathi+1] = logits
+
+        return all_logits, x_up
 
 def PreActResNet10(path_fc=False, num_classes=10, upsample='pixel'):
     return PreActResNet(PreActBlock, [1,1,1,1], path_fc=path_fc, num_classes=num_classes, upsample=upsample)
