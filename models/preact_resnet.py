@@ -233,6 +233,7 @@ class PreActResNet(nn.Module):
     def forward(self, x1, x2, alpha=0.5, use_input=True):
         # assert alpha >= 0 and alpha <= 1, "Alpha must be in range [0, 1]"
         before_paths = []
+        all_h = []
 
         path1 = self.path1(x1)
         pool1 = F.avg_pool2d(path1, 4)
@@ -253,6 +254,7 @@ class PreActResNet(nn.Module):
         layer2 = self.layer2(layer1)
         layer3 = self.layer3(layer2)
         layer4 = self.layer4(layer3)
+        all_h.append(layer4)
         pool = F.avg_pool2d(layer4, 4)
         pool = pool.view(pool.size(0), -1)
         logits = self.linear(pool)
@@ -273,6 +275,7 @@ class PreActResNet(nn.Module):
         layer2 = self.layer2(layer1)
         layer3 = self.layer3(layer2)
         layer4 = self.layer4(layer3)
+        all_h.append(layer4)
         pool = F.avg_pool2d(layer4, 4)
         pool = pool.view(pool.size(0), -1)
         logits = self.linear(pool)
@@ -320,7 +323,7 @@ class PreActResNet(nn.Module):
         #     logits = self.linear(pool)
         #     all_logits[pathi+1] = logits
 
-        return all_logits, x_up
+        return all_logits, x_up, all_h
 
 def PreActResNet10(path_fc=False, num_classes=10, upsample='pixel'):
     return PreActResNet(PreActBlock, [1,1,1,1], path_fc=path_fc, num_classes=num_classes, upsample=upsample)

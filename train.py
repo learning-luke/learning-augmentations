@@ -149,7 +149,7 @@ def get_loss2(inputs, targets, alpha_low=0.7, alpha_high=1.0):
     targets2 = targets[targets.size(0)//2:]
     alpha = torch.empty(inputs1.size(0), 1).uniform_(alpha_low, alpha_high).to(device)
 
-    all_logits, x_up = net(inputs1, inputs2, alpha)
+    all_logits, x_up, all_h = net(inputs1, inputs2, alpha)
     logits_mixed = all_logits[0]
     logits1 = all_logits[1]
     logits2 = all_logits[2]
@@ -159,10 +159,11 @@ def get_loss2(inputs, targets, alpha_low=0.7, alpha_high=1.0):
     loss_c += criterion(logits2, targets2)
 
     loss_g = rms_error(logits_mixed, logits1 * alpha + logits2 * (1-alpha)) * args.regularise_mult
+    loss_g += rms_error(all_h[0], all_h[1])
     # y_pred_fake = logits_mixed
     # y_pred = logits1 * alpha + logits2 * (1-alpha)
     # loss_g = (torch.mean(torch.nn.ReLU()(1.0 + (y_pred - torch.mean(y_pred_fake)))) + torch.mean(torch.nn.ReLU()(1.0 - (y_pred_fake - torch.mean(y_pred)))))/2
-    # loss_g += rms_error(logits_mixed, logits2 * (1-alpha)) * args.regularise_mult
+    # loss_g = rms_error(logits_mixed, logits2 * (1-alpha)) * args.regularise_mult
     return logits1, loss_c,loss_g, x_up
 
 def get_loss(inputs, targets):
