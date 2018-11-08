@@ -10,6 +10,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.backends.cudnn as cudnn
+import torch.nn.functional as F
 from torch.optim.lr_scheduler import CosineAnnealingLR, MultiStepLR
 from tensorboardX import SummaryWriter
 from utils.storage import build_experiment_folder, save_statistics, save_checkpoint, restore_model, save_image_batch
@@ -111,16 +112,19 @@ criterion_reg = nn.SmoothL1Loss()
 BCE_stable = torch.nn.BCEWithLogitsLoss()
 if args.logit_loss:
     criterion_sim = logit_error
-optimizer = optim.SGD(net.parameters(), lr=args.learning_rate, momentum=0.9, weight_decay=5e-4)
+optimizer_c = optim.SGD([p for name, p in net.named_parameters() if 'path' not in name], lr=args.learning_rate, momentum=0.9, weight_decay=5e-4)
+optimizer_g = optim.Adam([p for name, p in net.named_parameters() if 'path' in name], lr=0.001, amsgrad=True)
 
 if args.scheduler == 'CosineAnnealing':
-    scheduler = CosineAnnealingLR(optimizer=optimizer, T_max=args.max_epochs, eta_min=0)
+    scheduler_c = CosineAnnealingLR(optimizer=optimizer_c, T_max=args.max_epochs, eta_min=0)
+    scheduler_g = CosineAnnealingLR(optimizer=optimizer_g, T_max=args.max_epochs, eta_min=0)
 else:
-    scheduler = MultiStepLR(optimizer, milestones=args.milestones, gamma=0.2)
+    scheduler_c = MultiStepLR(optimizer_c, milestones=args.milestones, gamma=0.2)
+    scheduler_g = MultiStepLR(optimizer_g, milestones=args.milestones, gamma=0.2)
 
 ######################################################################################################### Restoring/logging
 
-restore_model(net, optimizer, args)
+restore_model(net, optimizer_c, optimizer_g, args)
 writer = SummaryWriter(log_dir=logs_filepath)
 
 
@@ -152,18 +156,29 @@ def get_loss(inputs, targets):
         logits = torch.zeros_like(all_logits[0])
         # TODO: learn to combine images?
 
-        loss_reg += criterion_reg(before_paths[0] + before_paths[1], inputs)
+        # loss_reg += criterion_reg(before_paths[0], inputs)
+        # loss_reg += criterion_reg(before_paths[1], inputs)
+        loss_reg += criterion_reg(before_paths[1]+before_paths[0], inputs)
+        # eps = 1e-4
+        # percentage_close_zero_0 = torch.sum(((before_paths[0] < eps) + (before_paths[0] > -eps)) == 2).float()/(128*32*32*3)
+        # percentage_close_zero_1 = torch.sum(((before_paths[1] < eps) + (before_paths[1] > -eps)) == 2).float()/(128*32*32*3)
+        #
+        # loss_reg -= (percentage_close_zero_0 + percentage_close_zero_1)
+
         loss_sim += criterion_sim(before_paths[0], before_paths[1])
         # loss += criterion(all_logits[0], targets)
         # logits += all_logits[0]
+        loss_sim += -torch.log((F.softmax(all_logits[1],dim=1) * F.softmax(all_logits[2],dim=1)).sum(dim=1).mean()) # minimise the relationship
+
+        # loss += criterion(all_logits[0], targets)
         loss += criterion(all_logits[1], targets)
-        logits += all_logits[1]
+        logits += (all_logits[1])
         num_comparisons += 1
         # TODO: check the effect of removing these lines:
-        secondary_targets = get_secondary_targets(all_logits[2], targets)
-        loss += criterion(all_logits[2], secondary_targets)
-        # logits += all_logits[2]
-        # logits /= 2
+        # secondary_targets = get_secondary_targets(all_logits[2], targets)
+        loss += criterion(all_logits[2], targets)
+        logits += all_logits[2]
+        logits /= 2
     else:
         all_logits, before_paths = net(inputs, use_input=True)
 
@@ -205,28 +220,33 @@ def train(epoch):
     with tqdm.tqdm(initial=0, total=n_train_batches) as train_pbar:
         for batch_idx, (inputs, targets) in enumerate(trainloader):
             inputs, targets = inputs.to(device), targets.to(device)
-            optimizer.zero_grad()
+            optimizer_c.zero_grad()
+
 
             before_paths, logits, loss, loss_sim, loss_reg, num_comparisons = get_loss(inputs, targets)
 
             train_loss += loss.item()
             loss_sim = (loss_sim/num_comparisons) * args.sim_loss_mult
-            loss += loss_sim
+            train_loss_sim += loss_sim.item()
+
             if args.regularise_mult != 0:
-                loss += loss_reg
+                loss_sim += loss_reg
                 train_loss_reg += loss_reg.item()
 
 
-            loss.backward()
-            optimizer.step()
+            loss.backward(retain_graph=True)
+            optimizer_c.step()
+
+            optimizer_g.zero_grad()
+            (loss_sim).backward()
+            optimizer_g.step()
 
 
-            train_loss_sim += loss_sim.item()
             _, predicted = logits.max(1)
             total += targets.size(0)
             correct += predicted.eq(targets).sum().item()
 
-            current_lr = optimizer.param_groups[0]['lr']
+            current_lr = optimizer_c.param_groups[0]['lr']
             iter_out = 'Training {};, LR: {:0.5f}, Loss: {:0.4f}, Loss_sim: {:0.4f}, Loss_reg: {:0.4f}, Acc: {:0.4f};'.format(
                 batch_idx,
                 current_lr,
@@ -319,7 +339,8 @@ def test(epoch):
 if __name__ == "__main__":
     with tqdm.tqdm(initial=start_epoch, total=args.max_epochs) as epoch_pbar:
         for epoch in range(start_epoch, args.max_epochs):
-            scheduler.step(epoch=epoch)
+            scheduler_c.step(epoch=epoch)
+            scheduler_g.step(epoch=epoch)
 
             train_loss, train_loss_sim, train_loss_reg, train_acc = train(epoch)
             test_loss, test_loss_sim, test_loss_reg, test_acc = test(epoch)
@@ -346,7 +367,8 @@ if __name__ == "__main__":
             state = {
                 'epoch': epoch,
                 'net': net.state_dict(),
-                'optimizer': optimizer.state_dict(),
+                'optimizer_c': optimizer_c.state_dict(),
+                'optimizer_g': optimizer_g.state_dict(),
             }
             epoch_pbar.set_description('Saving at {}/{}_checkpoint.pth.tar'.format(saved_models_filepath, epoch))
             filename = '{}_checkpoint.pth.tar'.format(epoch)

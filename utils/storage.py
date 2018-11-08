@@ -149,7 +149,7 @@ def save_checkpoint(state, is_best, directory='', filename='checkpoint.pth.tar')
         shutil.copyfile(save_path, best_save_path)
 
 
-def restore_model(net, optimizer, args):
+def restore_model(net, optimizer_c, optimizer_g, args):
     """Restores model and optimizer from file
 
     Args:
@@ -176,13 +176,22 @@ def restore_model(net, optimizer, args):
         net.load_state_dict(new_state_dict)
 
         new_state_dict = OrderedDict()
-        for k, v in checkpoint['optimizer'].items():
+        for k, v in checkpoint['optimizer_c'].items():
             if 'cuda' in k and args.device == 'cpu':
                 name = k.replace("cuda..", "")  # remove module.
             else:
                 name = k
             new_state_dict[name] = v
-        optimizer.load_state_dict(new_state_dict)
+        optimizer_c.load_state_dict(new_state_dict)
+
+        new_state_dict = OrderedDict()
+        for k, v in checkpoint['optimizer_g'].items():
+            if 'cuda' in k and args.device == 'cpu':
+                name = k.replace("cuda..", "")  # remove module.
+            else:
+                name = k
+            new_state_dict[name] = v
+        optimizer_g.load_state_dict(new_state_dict)
 
 
 def build_experiment_folder(args):
