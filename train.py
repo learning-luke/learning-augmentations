@@ -154,7 +154,7 @@ def get_loss(inputs, targets):
 
         loss_reg += criterion_reg(before_paths[0] + before_paths[1], inputs)
         loss_sim += criterion_sim(before_paths[0], before_paths[1])
-        loss += criterion(all_logits[0], targets)
+        # loss += criterion(all_logits[0], targets)
         # logits += all_logits[0]
         loss += criterion(all_logits[1], targets)
         logits += all_logits[1]
@@ -250,10 +250,12 @@ def train(epoch):
             if batch_idx == 0:
                 ordering = np.argsort(targets.detach().cpu().numpy())
                 save_image_batch("{}/train/{}_inputs.png".format(images_filepath, epoch), inputs[ordering])
+                outputs_combined = torch.zeros_like(before_paths[0])
                 for pathi in range(args.num_paths):
                     outputs = before_paths[pathi]
+                    outputs_combined += outputs
                     save_image_batch("{}/train/{}_outputs_{}.png".format(images_filepath, epoch, pathi), outputs[ordering])
-
+                save_image_batch("{}/train/{}_outputs_combined.png".format(images_filepath, epoch), outputs_combined[ordering])
 
 
     return train_loss / n_train_batches, train_loss_sim / n_train_batches, train_loss_reg / n_train_batches, correct / total
@@ -299,10 +301,12 @@ def test(epoch):
             if batch_idx == 0:
                 ordering = np.argsort(targets.detach().cpu().numpy())
                 save_image_batch("{}/test/{}_inputs.png".format(images_filepath, epoch), inputs[ordering])
+                outputs_combined = torch.zeros_like(before_paths[0])
                 for pathi in range(args.num_paths):
                     outputs = before_paths[pathi]
+                    outputs_combined += outputs
                     save_image_batch("{}/test/{}_outputs_{}.png".format(images_filepath, epoch, pathi), outputs[ordering])
-
+                save_image_batch("{}/test/{}_outputs_combined.png".format(images_filepath, epoch), outputs_combined[ordering])
         # tensorboard logs (once per epoch)
         steps= epoch*n_train_batches
         names = ['loss', 'acc']
