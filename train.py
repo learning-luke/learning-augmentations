@@ -158,9 +158,14 @@ def get_loss2(inputs, targets, alpha_low=0.7, alpha_high=1.0):
     loss_c = criterion(logits1, targets1)
     loss_c += criterion(logits2, targets2)
 
-    loss_g = rms_error(logits_mixed, logits1 * alpha + logits2 * (1-alpha)) * args.regularise_mult
-    for hi in range(0, 3):
-        loss_g += rms_error(all_h[hi], all_h[hi+3].detach() * alpha.view(alpha.size(0),1,1,1) + all_h[hi+6].detach() * (1-alpha).view(alpha.size(0),1,1,1))
+    h_count = len(all_h) // 3
+    hi = np.random.randint(0, h_count)
+    if hi < h_count-1:
+        loss_g = rms_error(all_h[hi], all_h[hi + h_count].detach() * alpha.view(alpha.size(0), 1, 1, 1) + all_h[hi + h_count].detach() * (1 - alpha).view(alpha.size(0), 1, 1, 1))
+    else:
+        loss_g = rms_error(all_h[hi], all_h[hi + h_count].detach() * alpha + all_h[hi + h_count].detach() * (1 - alpha))
+    # for hi in range(0, 3):
+    #     loss_g += rms_error(all_h[hi], all_h[hi+3].detach() * alpha.view(alpha.size(0),1,1,1) + all_h[hi+6].detach() * (1-alpha).view(alpha.size(0),1,1,1))
     # y_pred_fake = logits_mixed
     # y_pred = logits1 * alpha + logits2 * (1-alpha)
     # loss_g = (torch.mean(torch.nn.ReLU()(1.0 + (y_pred - torch.mean(y_pred_fake)))) + torch.mean(torch.nn.ReLU()(1.0 - (y_pred_fake - torch.mean(y_pred)))))/2

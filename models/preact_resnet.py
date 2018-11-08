@@ -247,10 +247,14 @@ class PreActResNet(nn.Module):
 
         x_up = self.path_up(pool_avg.view(pool_avg.size(0), pool_avg.size(1), 1, 1))
 
+
         all_logits = torch.zeros((3, x1.size(0), self.num_classes)).to(self.device)
 
+        all_h.append(x_up)
         layer0 = self.conv1(x_up)
+        all_h.append(layer0)
         layer1 = self.layer1(layer0)
+        all_h.append(layer1)
         layer2 = self.layer2(layer1)
         all_h.append(layer2)
         layer3 = self.layer3(layer2)
@@ -258,12 +262,17 @@ class PreActResNet(nn.Module):
         layer4 = self.layer4(layer3)
         all_h.append(layer4)
         pool = F.avg_pool2d(layer4, 4)
+        all_h.append(pool)
         pool = pool.view(pool.size(0), -1)
         logits = self.linear(pool)
+        all_h.append(logits)
         all_logits[0] = logits
 
+        all_h.append(x1)
         layer0 = self.conv1(x1)
+        all_h.append(layer0)
         layer1 = self.layer1(layer0)
+        all_h.append(layer1)
         layer2 = self.layer2(layer1)
         all_h.append(layer2)
         layer3 = self.layer3(layer2)
@@ -271,12 +280,17 @@ class PreActResNet(nn.Module):
         layer4 = self.layer4(layer3)
         all_h.append(layer4)
         pool = F.avg_pool2d(layer4, 4)
+        all_h.append(pool)
         pool = pool.view(pool.size(0), -1)
         logits = self.linear(pool)
+        all_h.append(logits)
         all_logits[1] = logits
 
+        all_h.append(x2)
         layer0 = self.conv1(x2)
+        all_h.append(layer0)
         layer1 = self.layer1(layer0)
+        all_h.append(layer1)
         layer2 = self.layer2(layer1)
         all_h.append(layer2)
         layer3 = self.layer3(layer2)
@@ -284,8 +298,10 @@ class PreActResNet(nn.Module):
         layer4 = self.layer4(layer3)
         all_h.append(layer4)
         pool = F.avg_pool2d(layer4, 4)
+        all_h.append(pool)
         pool = pool.view(pool.size(0), -1)
         logits = self.linear(pool)
+        all_h.append(logits)
         all_logits[2] = logits
 
         # all_logits = torch.zeros((self.num_paths+1, x.size(0), self.num_classes)).to(self.device)
