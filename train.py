@@ -129,6 +129,16 @@ def onehot(batch, depth=10):
     return ones.index_select(0, batch)
 ######################################################################################################### Training
 
+def get_secondary_targets(logits, targets):
+    new_targets = torch.zeros_like(targets).to(device)
+    sorted, indices = torch.sort(logits, dim=1)
+    for i in range(targets.size(0)):
+        if indices[i][-1] != targets[i]:
+            new_targets[i] = indices[i][-1]
+        else:
+            new_targets[i] = indices[i][-2]
+    return new_targets
+
 def get_loss(inputs, targets):
     loss = 0
     loss_sim = 0
@@ -145,14 +155,15 @@ def get_loss(inputs, targets):
         loss_reg += criterion_reg(before_paths[0] + before_paths[1], inputs)
         loss_sim += criterion_sim(before_paths[0], before_paths[1])
         loss += criterion(all_logits[0], targets)
-        logits += all_logits[0]
+        # logits += all_logits[0]
         loss += criterion(all_logits[1], targets)
         logits += all_logits[1]
         num_comparisons += 1
         # TODO: check the effect of removing these lines:
-        loss += criterion(all_logits[2], targets)/2
-        logits += all_logits[2]
-        logits /= 2
+        secondary_targets = get_secondary_targets(all_logits[2], targets)
+        loss += criterion(all_logits[2], secondary_targets)
+        # logits += all_logits[2]
+        # logits /= 2
     else:
         all_logits, before_paths = net(inputs, use_input=True)
 
