@@ -136,7 +136,7 @@ def get_loss(inputs, targets):
     num_comparisons = 0
 
     if args.learn_cutout:
-        all_logits, before_paths = net(inputs, use_input=False)
+        all_logits, before_paths = net(inputs, use_input=True)
 
 
         logits = torch.zeros_like(all_logits[0])
@@ -144,6 +144,8 @@ def get_loss(inputs, targets):
 
         loss_reg += criterion_reg(before_paths[0] + before_paths[1], inputs)
         loss_sim += criterion_sim(before_paths[0], before_paths[1])
+        loss += criterion(all_logits[0], targets)
+        logits += all_logits[0]
         loss += criterion(all_logits[1], targets)
         logits += all_logits[1]
         num_comparisons += 1
