@@ -268,14 +268,18 @@ class PreActResNet(nn.Module):
 
     def forward(self, x, use_input=True):
         before_paths = []
-
+        all_h = []
         all_logits = torch.zeros((self.num_paths+1, x.size(0), self.num_classes)).to(self.device)
         if use_input:
             layer0 = self.conv1(x)
             layer1 = self.layer1(layer0)
             layer2 = self.layer2(layer1)
+            all_h.append(layer2)
             layer3 = self.layer3(layer2)
+            all_h.append(layer3)
             layer4 = self.layer4(layer3)
+            all_h.append(layer4)
+
             pool = F.avg_pool2d(layer4, 4)
             pool = pool.view(pool.size(0), -1)
             logits = self.linear(pool)
@@ -302,8 +306,11 @@ class PreActResNet(nn.Module):
         layer0 = self.conv1(self.drop(path1_0_up))
         layer1 = self.layer1(layer0)
         layer2 = self.layer2(layer1)
+        all_h.append(layer2)
         layer3 = self.layer3(layer2)
+        all_h.append(layer3)
         layer4 = self.layer4(layer3)
+        all_h.append(layer4)
         pool = F.avg_pool2d(layer4, 4)
         pool = pool.view(pool.size(0), -1)
         logits = self.linear(pool)
@@ -330,8 +337,11 @@ class PreActResNet(nn.Module):
         layer0 = self.conv1(self.drop(path2_0_up))
         layer1 = self.layer1(layer0)
         layer2 = self.layer2(layer1)
+        all_h.append(layer2)
         layer3 = self.layer3(layer2)
+        all_h.append(layer3)
         layer4 = self.layer4(layer3)
+        all_h.append(layer4)
         pool = F.avg_pool2d(layer4, 4)
         pool = pool.view(pool.size(0), -1)
         logits = self.linear(pool)
@@ -368,7 +378,7 @@ class PreActResNet(nn.Module):
         #     logits = self.linear(pool)
         #     all_logits[pathi+1] = logits
 
-        return all_logits, before_paths
+        return all_logits, before_paths, all_h
 
 def PreActResNet10(path_fc=False, num_classes=10, upsample='pixel'):
     return PreActResNet(PreActBlock, [1,1,1,1], path_fc=path_fc, num_classes=num_classes, upsample=upsample)

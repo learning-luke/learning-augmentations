@@ -78,7 +78,7 @@ net = ModelSelector(dataset=args.dataset,
                     filters=args.filters,
                     activation=args.activation,
                     widen_factor=args.widen_factor,
-                    num_classes=10,
+                    num_classes=11,
                     resdepth=args.resdepth).select(args.model, args.use_fc, args.upsample_type)
 
 net = net.to(device)
@@ -150,7 +150,7 @@ def get_loss(inputs, targets):
     num_comparisons = 0
 
     if args.learn_cutout:
-        all_logits, before_paths = net(inputs, use_input=True)
+        all_logits, before_paths, all_h = net(inputs, use_input=True)
 
 
         logits = torch.zeros_like(all_logits[0])
@@ -158,26 +158,50 @@ def get_loss(inputs, targets):
 
         # loss_reg += criterion_reg(before_paths[0], inputs)
         # loss_reg += criterion_reg(before_paths[1], inputs)
-        loss_reg += criterion_reg(before_paths[1]+before_paths[0], inputs)
-        # eps = 1e-4
+        # loss_reg += rms_error(F.softmax(all_logits[1],dim=1), F.softmax(all_logits[0],dim=1) - F.softmax(all_logits[2],dim=1))
+        # loss_reg += rms_error(all_logits[2], all_logits[0])
+        loss_reg += criterion_reg(before_paths[1] + before_paths[0], inputs)
+        # loss_reg += criterion_reg(all_logits[1], all_logits[0].detach())
+        # loss_reg = criterion_reg(all_logits[2], all_logits[0].detach())
+        #
+        # hi = np.random.randint(0,3)
+        # loss_reg += rms_error(all_h[hi].detach(), all_h[hi+3])
+        # loss_reg += rms_error(all_h[hi].detach(), all_h[hi+6])
+        # loss_reg += criterion_sim(all_h[hi].detach(), all_h[7])
+
+        # loss_reg += criterion_reg(all_logits[2], all_logits[0].detach())
+
+        # eps = 1e-3
         # percentage_close_zero_0 = torch.sum(((before_paths[0] < eps) + (before_paths[0] > -eps)) == 2).float()/(128*32*32*3)
         # percentage_close_zero_1 = torch.sum(((before_paths[1] < eps) + (before_paths[1] > -eps)) == 2).float()/(128*32*32*3)
-        #
+
         # loss_reg -= (percentage_close_zero_0 + percentage_close_zero_1)
 
-        loss_sim += criterion_sim(before_paths[0], before_paths[1])
+        # loss_sim += criterion_sim(before_paths[0], before_paths[1])
         # loss += criterion(all_logits[0], targets)
         # logits += all_logits[0]
-        loss_sim += -torch.log((F.softmax(all_logits[1],dim=1) * F.softmax(all_logits[2],dim=1)).sum(dim=1).mean()) # minimise the relationship
+        loss_sim += -((F.softmax(all_logits[1],dim=1) * F.softmax(all_logits[2],dim=1)).sum(dim=1).mean()) # minimise the relationship
+        # loss_sim += criterion_sim(all_h[0], all_h[3])
+        # loss_sim += rms_error(F.softmax(all_logits[1],dim=1), F.softmax(all_logits[2],dim=1))
+        # loss_sim += rms_error((F.softmax(all_logits[1],dim=1) + F.softmax(all_logits[2],dim=1))/2, F.softmax(all_logits[0],dim=1))
+        # loss_sim += criterion_sim(all_logits[1], all_logits[2])
+        hi = np.random.randint(3,6)
+        loss_sim += criterion_sim(all_h[hi], all_h[hi+3])
+        # loss_sim += criterion_sim(all_h[4], all_h[7])
 
-        # loss += criterion(all_logits[0], targets)
+
+        loss += criterion(all_logits[0], targets)
         loss += criterion(all_logits[1], targets)
+        # loss += criterion(all_logits[2], torch.ones_like(targets)*10)
+        # loss += criterion(all_logits[2], targets)
+        logits += (all_logits[0])
         logits += (all_logits[1])
+        # logits += (all_logits[2])
         num_comparisons += 1
         # TODO: check the effect of removing these lines:
         # secondary_targets = get_secondary_targets(all_logits[2], targets)
-        loss += criterion(all_logits[2], targets)
-        logits += all_logits[2]
+        # loss += criterion(all_logits[2], secondary_targets)
+        # logits += all_logits[2]
         logits /= 2
     else:
         all_logits, before_paths = net(inputs, use_input=True)
