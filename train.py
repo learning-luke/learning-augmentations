@@ -167,17 +167,19 @@ def get_loss(inputs, targets):
 
     all_logits, before_paths, all_h, choice = net(inputs, use_input=not args.train_jointly, softmax_type=args.softmax_type)
 
-    logits = all_logits[1 if args.train_jointly else 0]
-    logits_masked_input = all_logits[1]
+    logits_original = all_logits[ 0]
+    logits_masked_foreground = all_logits[1]
+    logits_masked_background = all_logits[2]
 
-    loss = criterion(logits, targets)
-    loss_masked_input = criterion(logits_masked_input, targets)
+
+    loss = criterion(logits_original, targets)
+    loss_masked_input = criterion(logits_masked_foreground, targets)
+    loss_reg = torch.mean(F.softmax(logits_masked_foreground, dim=1) * F.softmax(logits_masked_background, dim=1))
     # loss_reg = rms_error(all_h[0].detach(), all_h[1])
     # loss_reg = block_loss(choice[:,0:1,:,:], args.std_block_size)
 
-    loss_reg = None
 
-    return logits, logits_masked_input, loss, loss_masked_input, loss_reg, choice
+    return logits_original, logits_masked_foreground, loss, loss_masked_input, loss_reg, choice
 
 
 
@@ -208,8 +210,8 @@ def train(epoch):
             optimizer_g.zero_grad()
             targeted_loss = loss_masked_input#/(loss + 1e-5)
             if args.regularise_mult != 0:
-                targeted_loss += torch.sqrt(torch.mean((args.regularise_mult - (torch.sum(choice[:, 0:1, :, :].contiguous().view(args.batch_size,1,-1), dim=-1)/(32*32)))**2))
-                # targeted_loss += loss_reg * args.regularise_mult
+                targeted_loss += torch.mean(choice[:, 0:1, :, :]) * args.regularise_mult#torch.sqrt(torch.mean((args.regularise_mult - (torch.sum(choice[:, 0:1, :, :].contiguous().view(args.batch_size,1,-1), dim=-1)/(32*32)))**2))
+                targeted_loss += loss_reg * args.sim_loss_mult
             targeted_loss_train += targeted_loss.item()
             (targeted_loss).backward()
             optimizer_g.step()
