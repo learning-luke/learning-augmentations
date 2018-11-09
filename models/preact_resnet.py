@@ -286,7 +286,7 @@ class PreActResNet(nn.Module):
         # path1_0_up = self.path2(x)
         # gumbel_softmax(logits, temperature=0.5)
         if softmax_type == 'gumbel':
-            choice = gumbel_softmax(path1_0_up,temperature=self.path_softmax_temperature)
+            choice = gumbel_softmax(path1_0_up,temperature=1)
         else:
             choice = F.softmax(path1_0_up/1, dim=1)
 

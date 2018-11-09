@@ -89,6 +89,10 @@ def parse_args():
 
     parser.add_argument('-smt', '--softmax_type', type=str, default='gumbel',
                         help='Type of softmax')
+    parser.add_argument('-joint', '--train_jointly', type=int, default=0,
+                        help='Train jointly?')
+    parser.add_argument('-sbs', '--std_block_size', type=int, default=4,
+                        help='Standard deviation block size?')
 
 
     # model
