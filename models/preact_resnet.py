@@ -181,7 +181,7 @@ class PreActResNet(nn.Module):
         self.num_classes = num_classes
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         block_up = PreActBottleneckUP if block == PreActBottleneck else PreActBlockUP
-        self.dropout_p = 0.3
+        self.dropout_p = 0.0
         self.path_fc = path_fc
 
 
@@ -207,9 +207,23 @@ class PreActResNet(nn.Module):
         self.in_planes = 32 + 16
         self.path1_1_up = self._make_layer(block_up, 16, num_blocks[0], stride=1)
         self.in_planes = 16 + 16
-        self.path1_0_up = nn.Sequential(nn.Conv2d(32, 2, kernel_size=3, stride=1, padding=1, bias=False),
-                                        nn.BatchNorm2d(2),
-                                        nn.Tanh())
+        self.path1_0_up = nn.Sequential(nn.Conv2d(32, 2, kernel_size=3, stride=1, padding=1, bias=True),
+                                        )
+
+        # self.path2 = nn.Sequential(
+        #     nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False),
+        #     nn.BatchNorm2d(64),
+        #     nn.ReLU(),
+        #     self._make_layer(block, 64, num_blocks[0], stride=1),
+        #     self._make_layer(block, 128, num_blocks[1], stride=2),
+        #     self._make_layer(block, 256, num_blocks[2], stride=2),
+        #     self._make_layer(block, 512, num_blocks[2], stride=2),
+        #     self._make_layer(block_up, 512, num_blocks[2], stride=2),
+        #     self._make_layer(block_up, 256, num_blocks[2], stride=2),
+        #     self._make_layer(block_up, 128, num_blocks[1], stride=2),
+        #     self._make_layer(block_up, 64, num_blocks[0], stride=1),
+        #     nn.Conv2d(64, 2, kernel_size=3, stride=1, padding=1, bias=True),
+        #     )
 
         self.path_softmax_temperature = nn.Parameter(torch.ones(1))
 
@@ -241,9 +255,9 @@ class PreActResNet(nn.Module):
             layer0 = self.conv1(x)
             layer1 = self.layer1(layer0)
             layer2 = self.layer2(layer1)
-            all_h.append(layer2)
+            # all_h.append(layer2)
             layer3 = self.layer3(layer2)
-            all_h.append(layer3)
+            # all_h.append(layer3)
             layer4 = self.layer4(layer3)
             all_h.append(layer4)
 
@@ -269,18 +283,19 @@ class PreActResNet(nn.Module):
         path1_1_up = self.path1_1_up(torch.cat((path1_1_down, path1_2_up), dim=1))
         path1_0_up = self.path1_0_up(torch.cat((path1_0_down, path1_1_up), dim=1))
         before_paths.append(path1_0_up)
+        # path1_0_up = self.path2(x)
         # gumbel_softmax(logits, temperature=0.5)
         if softmax_type == 'gumbel':
             choice = gumbel_softmax(path1_0_up,temperature=self.path_softmax_temperature)
         else:
-            choice = F.softmax(path1_0_up/self.path_softmax_temperature, dim=1)
+            choice = F.softmax(path1_0_up/1, dim=1)
 
         layer0_gumble = self.conv1(x*choice[:,0:1,:,:])
         layer1_gumble = self.layer1(layer0_gumble)
         layer2_gumble = self.layer2(layer1_gumble)
-        all_h.append(layer2_gumble)
+        # all_h.append(layer2_gumble)
         layer3_gumble = self.layer3(layer2_gumble)
-        all_h.append(layer3_gumble)
+        # all_h.append(layer3_gumble)
         layer4_gumble = self.layer4(layer3_gumble)
         all_h.append(layer4_gumble)
 

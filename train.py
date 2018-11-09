@@ -25,6 +25,7 @@ debug = False
 if debug:
     args.logit_loss = 0
     args.learn_cutout = 1
+    args.regularise_mult = 1
     # args.use_fc = 1
     args.upsample_type = 'nearest'
     args.softmax_type = 'softmax'
@@ -68,7 +69,9 @@ if not args.resume:
                      "train_acc",
                      "train_acc_masked",
                      "test_acc",
-                     "test_acc_masked"
+                     "test_acc_masked",
+                     "temperature_train",
+                     "temperature_test"
                      ],
                     create=True)
 
@@ -109,7 +112,7 @@ def rms_error(x, y):
 
 criterion = nn.CrossEntropyLoss()
 criterion_sim = mean_abs_error
-criterion_reg = nn.SmoothL1Loss()
+criterion_reg = nn.L1Loss()
 BCE_stable = torch.nn.BCEWithLogitsLoss()
 if args.logit_loss:
     criterion_sim = logit_error
@@ -152,8 +155,9 @@ def get_loss(inputs, targets):
 
     loss = criterion(logits, targets)
     loss_masked_input = criterion(logits_masked_input, targets)
+    loss_reg = rms_error(all_h[0].detach(), all_h[1])
 
-    return logits, logits_masked_input, loss, loss_masked_input, choice
+    return logits, logits_masked_input, loss, loss_masked_input, loss_reg, choice
 
 
 
@@ -172,7 +176,7 @@ def train(epoch):
             inputs, targets = inputs.to(device), targets.to(device)
             optimizer_c.zero_grad()
 
-            logits, logits_masked_input, loss, loss_masked_input, choice = get_loss(inputs, targets)
+            logits, logits_masked_input, loss, loss_masked_input, loss_reg, choice = get_loss(inputs, targets)
 
             train_loss += loss.item()
             train_loss_masked += loss_masked_input.item()
@@ -183,6 +187,9 @@ def train(epoch):
 
             optimizer_g.zero_grad()
             targeted_loss = loss_masked_input#/(loss + 1e-5)
+            if args.regularise_mult != 0:
+                targeted_loss += torch.mean(choice[:, 0:1, :, :]) * args.regularise_mult
+                # targeted_loss += loss_reg * args.regularise_mult
             targeted_loss_train += targeted_loss.item()
             (targeted_loss).backward()
             optimizer_g.step()
@@ -217,7 +224,7 @@ def train(epoch):
                 save_image_batch("{}/train/{}_inputs_masked.png".format(images_filepath, epoch), (inputs*choice[:, 0:1, :, :])[ordering])
 
 
-    return train_loss / n_train_batches, train_loss_masked / n_train_batches, correct / total, correct_masked / total
+    return train_loss / n_train_batches, train_loss_masked / n_train_batches, correct / total, correct_masked / total, temperature_train/n_train_batches
 
 def test(epoch):
     global best_acc, net
@@ -234,12 +241,16 @@ def test(epoch):
         for batch_idx, (inputs, targets) in enumerate(testloader):
             inputs, targets = inputs.to(device), targets.to(device)
 
-            logits, logits_masked_input, loss, loss_masked_input, choice = get_loss(inputs, targets)
+            logits, logits_masked_input, loss, loss_masked_input, loss_reg, choice = get_loss(inputs, targets)
 
             test_loss += loss.item()
             test_loss_masked += loss_masked_input.item()
 
             targeted_loss = loss_masked_input #/ (loss + 1e-5)
+            if args.regularise_mult != 0:
+                targeted_loss += torch.mean(choice[:, 0:1, :, :]) * args.regularise_mult
+                # targeted_loss += loss_reg * args.regularise_mult
+
             targeted_loss_test += targeted_loss.item()
             temperature_test += net.path_softmax_temperature[0].item() if device == 'cpu' else net.module.path_softmax_temperature[0].item()
 
@@ -266,7 +277,7 @@ def test(epoch):
                 save_image_batch("{}/test/{}_inputs_masked.png".format(images_filepath, epoch),(inputs * choice[:, 0:1, :, :])[ordering])
 
 
-    return test_loss / n_test_batches, test_loss_masked / n_test_batches, correct / total, correct_masked / total
+    return test_loss / n_test_batches, test_loss_masked / n_test_batches, correct / total, correct_masked / total, temperature_test/n_test_batches
 
 if __name__ == "__main__":
     with tqdm.tqdm(initial=start_epoch, total=args.max_epochs) as epoch_pbar:
@@ -274,8 +285,8 @@ if __name__ == "__main__":
             scheduler_c.step(epoch=epoch)
             scheduler_g.step(epoch=epoch)
 
-            train_loss, train_loss_masked, train_acc, train_acc_masked = train(epoch)
-            test_loss, test_loss_masked, test_acc, test_acc_masked = test(epoch)
+            train_loss, train_loss_masked, train_acc, train_acc_masked, temperature_train = train(epoch)
+            test_loss, test_loss_masked, test_acc, test_acc_masked, temperature_test = test(epoch)
 
             save_statistics(logs_filepath, "result_summary_statistics",
                             [epoch,
@@ -286,7 +297,9 @@ if __name__ == "__main__":
                              train_acc,
                              train_acc_masked,
                              test_acc,
-                             test_acc_masked])
+                             test_acc_masked,
+                             temperature_train,
+                             temperature_test])
 
             # Saving models
             is_best = False
