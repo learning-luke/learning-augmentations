@@ -6,7 +6,31 @@ Reference:
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.autograd import Variable
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
+def sample_gumbel(shape, eps=1e-20):
+    U = torch.rand(shape).to(device)
+    return -Variable(torch.log(-torch.log(U + eps) + eps))
 
+def gumbel_softmax_sample(logits, temperature):
+    y = logits + sample_gumbel(logits.size())
+    return F.softmax(y / temperature, dim=1)
+
+def gumbel_softmax(logits, temperature):
+    """
+    input: [*, n_class]
+    return: [*, n_class] an one-hot vector
+    """
+    y = gumbel_softmax_sample(logits, temperature)
+    shape = y.size()
+    _, ind = y.max(dim=1,keepdim=True)
+    y_hard = torch.zeros_like(y)#.view(-1, shape[-1])
+    y_hard.scatter_(1, ind, 1)
+    y_hard = y_hard.view(*shape)
+
+
+    y_hard = (y_hard - y).detach() + y
+    return (y_hard - y).detach() + y
 
 class PreActBlock(nn.Module):
     '''Pre-activation version of the BasicBlock.'''
@@ -159,92 +183,33 @@ class PreActResNet(nn.Module):
         block_up = PreActBottleneckUP if block == PreActBottleneck else PreActBlockUP
         self.dropout_p = 0.3
         self.path_fc = path_fc
-        if path_fc:
-            self.path1 = nn.Sequential(nn.Linear(32 * 32 * 3, 32 * 32 * 3), nn.BatchNorm1d(32 * 32 * 3), nn.ReLU(),
-                                       nn.Linear(32 * 32 * 3, 32 * 32 * 3), nn.BatchNorm1d(32 * 32 * 3), nn.Tanh())
-            self.path2 = nn.Sequential(nn.Linear(32 * 32 * 3, 32 * 32 * 3), nn.BatchNorm1d(32 * 32 * 3), nn.ReLU(),
-                                       nn.Linear(32 * 32 * 3, 32 * 32 * 3), nn.BatchNorm1d(32 * 32 * 3), nn.Tanh())
-        else:
 
-            upsampler = nn.Sequential(nn.PixelShuffle(4), nn.Conv2d(8, 128, kernel_size=1, stride=1, bias=False)) if upsample == 'pixel' else nn.Upsample(scale_factor=4)
 
-            self.in_planes = 16
-            self.path1_0_down = nn.Sequential(nn.Conv2d(3, 16, kernel_size=3, stride=1, padding=1, bias=False),
-                                              nn.BatchNorm2d(16),
-                                              nn.ReLU(), )
-            self.path1_1_down = self._make_layer(block, 16, num_blocks[0], stride=1)
-            self.path1_2_down = self._make_layer(block, 32, num_blocks[1], stride=2)
-            self.path1_3_down = self._make_layer(block, 64, num_blocks[2], stride=2)
-            self.path1_4_down = self._make_layer(block, 128, num_blocks[3], stride=2)
-            self.path1_pool_down = nn.Sequential(nn.MaxPool2d(4), View((-1,)))
-            self.path1_linear = nn.Linear(128, 128)
-            self.path1_pool_up = nn.Sequential(View((128, 1, 1)), upsampler)
-            self.in_planes = 256
-            self.path1_4_up = self._make_layer(block_up, 128, num_blocks[3], stride=2)
-            self.in_planes = 128 + 64
-            self.path1_3_up = self._make_layer(block_up, 64, num_blocks[2], stride=2)
-            self.in_planes = 64 + 32
-            self.path1_2_up = self._make_layer(block_up, 32, num_blocks[1], stride=2)
-            self.in_planes = 32 + 16
-            self.path1_1_up = self._make_layer(block_up, 16, num_blocks[0], stride=1)
-            self.in_planes = 16 + 16
-            self.path1_0_up = nn.Sequential(nn.Conv2d(32, 3, kernel_size=3, stride=1, padding=1, bias=False),
-                                            nn.BatchNorm2d(3),
-                                            nn.Tanh())
+        upsampler = nn.Sequential(nn.PixelShuffle(4), nn.Conv2d(8, 128, kernel_size=1, stride=1, bias=False)) if upsample == 'pixel' else nn.Upsample(scale_factor=4)
 
-            self.in_planes = 16
-            self.path2_0_down = nn.Sequential(nn.Conv2d(3, 16, kernel_size=3, stride=1, padding=1, bias=False),
-                                              nn.BatchNorm2d(16),
-                                              nn.ReLU(), )
-            self.path2_1_down = self._make_layer(block, 16, num_blocks[0], stride=1)
-            self.path2_2_down = self._make_layer(block, 32, num_blocks[1], stride=2)
-            self.path2_3_down = self._make_layer(block, 64, num_blocks[2], stride=2)
-            self.path2_4_down = self._make_layer(block, 128, num_blocks[3], stride=2)
-            self.path2_pool_down = nn.Sequential(nn.MaxPool2d(4), View((-1,)))
-            self.path2_linear = nn.Linear(128, 128)
-            self.path2_pool_up = nn.Sequential(View((128, 1, 1)), upsampler)
-            self.in_planes = 256
-            self.path2_4_up = self._make_layer(block_up, 128, num_blocks[3], stride=2)
-            self.in_planes = 128 + 64
-            self.path2_3_up = self._make_layer(block_up, 64, num_blocks[2], stride=2)
-            self.in_planes = 64 + 32
-            self.path2_2_up = self._make_layer(block_up, 32, num_blocks[1], stride=2)
-            self.in_planes = 32 + 16
-            self.path2_1_up = self._make_layer(block_up, 16, num_blocks[0], stride=1)
-            self.in_planes = 16 + 16
-            self.path2_0_up = nn.Sequential(nn.Conv2d(32, 3, kernel_size=3, stride=1, padding=1, bias=False),
-                                            nn.BatchNorm2d(3),
-                                            nn.Tanh())
-
-            # self.path1 = nn.Sequential(
-            #
-            #
-            #
-            #
-            #     #
-            #     # self._make_layer(block_up, 512, num_blocks[2], stride=2),
-            #     self._make_layer(block_up, 256, num_blocks[2], stride=2),
-            #     self._make_layer(block_up, 128, num_blocks[1], stride=2),
-            #     self._make_layer(block_up, 64, num_blocks[0], stride=1),
-            #     nn.Conv2d(64, 3, kernel_size=3, stride=1, padding=1, bias=False),
-            #     nn.BatchNorm2d(3),
-            #     nn.Tanh())
-
-            # self.path2 = nn.Sequential(
-            #     nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False),
-            #     nn.BatchNorm2d(64),
-            #     nn.ReLU(),
-            #     self._make_layer(block, 64, num_blocks[0], stride=1),
-            #     self._make_layer(block, 128, num_blocks[1], stride=2),
-            #     self._make_layer(block, 256, num_blocks[2], stride=2),
-            #     # self._make_layer(block, 512, num_blocks[2], stride=2),
-            #     # self._make_layer(block_up, 512, num_blocks[2], stride=2),
-            #     self._make_layer(block_up, 256, num_blocks[2], stride=2),
-            #     self._make_layer(block_up, 128, num_blocks[1], stride=2),
-            #     self._make_layer(block_up, 64, num_blocks[0], stride=1),
-            #     nn.Conv2d(64, 3, kernel_size=3, stride=1, padding=1, bias=False),
-            #     nn.BatchNorm2d(3),
-            #     nn.Tanh())
+        self.in_planes = 16
+        self.path1_0_down = nn.Sequential(nn.Conv2d(3, 16, kernel_size=3, stride=1, padding=1, bias=False),
+                                          nn.BatchNorm2d(16),
+                                          nn.ReLU(), )
+        self.path1_1_down = self._make_layer(block, 16, num_blocks[0], stride=1)
+        self.path1_2_down = self._make_layer(block, 32, num_blocks[1], stride=2)
+        self.path1_3_down = self._make_layer(block, 64, num_blocks[2], stride=2)
+        self.path1_4_down = self._make_layer(block, 128, num_blocks[3], stride=2)
+        self.path1_pool_down = nn.Sequential(nn.MaxPool2d(4), View((-1,)))
+        self.path1_linear = nn.Linear(128, 128)
+        self.path1_pool_up = nn.Sequential(View((128, 1, 1)), upsampler)
+        self.in_planes = 256
+        self.path1_4_up = self._make_layer(block_up, 128, num_blocks[3], stride=2)
+        self.in_planes = 128 + 64
+        self.path1_3_up = self._make_layer(block_up, 64, num_blocks[2], stride=2)
+        self.in_planes = 64 + 32
+        self.path1_2_up = self._make_layer(block_up, 32, num_blocks[1], stride=2)
+        self.in_planes = 32 + 16
+        self.path1_1_up = self._make_layer(block_up, 16, num_blocks[0], stride=1)
+        self.in_planes = 16 + 16
+        self.path1_0_up = nn.Sequential(nn.Conv2d(32, 2, kernel_size=3, stride=1, padding=1, bias=False),
+                                        nn.BatchNorm2d(2),
+                                        nn.Tanh())
 
         self.in_planes = 64
         self.drop = nn.Dropout2d(self.dropout_p)
@@ -302,50 +267,66 @@ class PreActResNet(nn.Module):
         path1_1_up = self.path1_1_up(torch.cat((path1_1_down, path1_2_up), dim=1))
         path1_0_up = self.path1_0_up(torch.cat((path1_0_down, path1_1_up), dim=1))
         before_paths.append(path1_0_up)
+        # gumbel_softmax(logits, temperature=0.5)
+        choice = gumbel_softmax(path1_0_up, temperature=0.5)
 
-        layer0 = self.conv1(self.drop(path1_0_up))
-        layer1 = self.layer1(layer0)
-        layer2 = self.layer2(layer1)
-        all_h.append(layer2)
-        layer3 = self.layer3(layer2)
-        all_h.append(layer3)
-        layer4 = self.layer4(layer3)
-        all_h.append(layer4)
-        pool = F.avg_pool2d(layer4, 4)
-        pool = pool.view(pool.size(0), -1)
-        logits = self.linear(pool)
-        all_logits[1] = logits
+        layer0_gumble = self.conv1(x*choice[:,0:1,:,:])
+        layer1_gumble = self.layer1(layer0_gumble)
+        layer2_gumble = self.layer2(layer1_gumble)
+        all_h.append(layer2_gumble)
+        layer3_gumble = self.layer3(layer2_gumble)
+        all_h.append(layer3_gumble)
+        layer4_gumble = self.layer4(layer3_gumble)
+        all_h.append(layer4_gumble)
 
-        # PATH 2
+        pool_gumble = F.avg_pool2d(layer4_gumble, 4)
+        pool_gumble = pool_gumble.view(pool_gumble.size(0), -1)
+        logits_gumble = self.linear(pool_gumble)
+        all_logits[1] = logits_gumble
 
-        path2_0_down = self.path2_0_down(x)
-        path2_1_down = self.path2_1_down(path2_0_down)
-        path2_2_down = self.path2_2_down(path2_1_down)
-        path2_3_down = self.path2_3_down(path2_2_down)
-        path2_4_down = self.path2_4_down(path2_3_down)
-        path2_pool_down = self.path2_pool_down(path2_4_down)
-        path2_linear = self.path2_linear(path2_pool_down)
+        # layer0 = self.conv1(self.drop(path1_0_up))
+        # layer1 = self.layer1(layer0)
+        # layer2 = self.layer2(layer1)
+        # all_h.append(layer2)
+        # layer3 = self.layer3(layer2)
+        # all_h.append(layer3)
+        # layer4 = self.layer4(layer3)
+        # all_h.append(layer4)
+        # pool = F.avg_pool2d(layer4, 4)
+        # pool = pool.view(pool.size(0), -1)
+        # logits = self.linear(pool)
+        # all_logits[1] = logits
 
-        path2_pool_up = self.path2_pool_up(path2_linear)
-        path2_4_up = self.path2_4_up(torch.cat((path2_4_down, path2_pool_up), dim=1))
-        path2_3_up = self.path2_3_up(torch.cat((path2_3_down, path2_4_up), dim=1))
-        path2_2_up = self.path2_2_up(torch.cat((path2_2_down, path2_3_up), dim=1))
-        path2_1_up = self.path2_1_up(torch.cat((path2_1_down, path2_2_up), dim=1))
-        path2_0_up = self.path2_0_up(torch.cat((path2_0_down, path2_1_up), dim=1))
-        before_paths.append(path2_0_up)
-
-        layer0 = self.conv1(self.drop(path2_0_up))
-        layer1 = self.layer1(layer0)
-        layer2 = self.layer2(layer1)
-        all_h.append(layer2)
-        layer3 = self.layer3(layer2)
-        all_h.append(layer3)
-        layer4 = self.layer4(layer3)
-        all_h.append(layer4)
-        pool = F.avg_pool2d(layer4, 4)
-        pool = pool.view(pool.size(0), -1)
-        logits = self.linear(pool)
-        all_logits[2] = logits
+        # # PATH 2
+        #
+        # path2_0_down = self.path2_0_down(x)
+        # path2_1_down = self.path2_1_down(path2_0_down)
+        # path2_2_down = self.path2_2_down(path2_1_down)
+        # path2_3_down = self.path2_3_down(path2_2_down)
+        # path2_4_down = self.path2_4_down(path2_3_down)
+        # path2_pool_down = self.path2_pool_down(path2_4_down)
+        # path2_linear = self.path2_linear(path2_pool_down)
+        #
+        # path2_pool_up = self.path2_pool_up(path2_linear)
+        # path2_4_up = self.path2_4_up(torch.cat((path2_4_down, path2_pool_up), dim=1))
+        # path2_3_up = self.path2_3_up(torch.cat((path2_3_down, path2_4_up), dim=1))
+        # path2_2_up = self.path2_2_up(torch.cat((path2_2_down, path2_3_up), dim=1))
+        # path2_1_up = self.path2_1_up(torch.cat((path2_1_down, path2_2_up), dim=1))
+        # path2_0_up = self.path2_0_up(torch.cat((path2_0_down, path2_1_up), dim=1))
+        # before_paths.append(path2_0_up)
+        #
+        # layer0 = self.conv1(self.drop(path2_0_up))
+        # layer1 = self.layer1(layer0)
+        # layer2 = self.layer2(layer1)
+        # all_h.append(layer2)
+        # layer3 = self.layer3(layer2)
+        # all_h.append(layer3)
+        # layer4 = self.layer4(layer3)
+        # all_h.append(layer4)
+        # pool = F.avg_pool2d(layer4, 4)
+        # pool = pool.view(pool.size(0), -1)
+        # logits = self.linear(pool)
+        # all_logits[2] = logits
 
 
         # for pathi in range(self.num_paths):
@@ -378,7 +359,7 @@ class PreActResNet(nn.Module):
         #     logits = self.linear(pool)
         #     all_logits[pathi+1] = logits
 
-        return all_logits, before_paths, all_h
+        return all_logits, before_paths, all_h, choice
 
 def PreActResNet10(path_fc=False, num_classes=10, upsample='pixel'):
     return PreActResNet(PreActBlock, [1,1,1,1], path_fc=path_fc, num_classes=num_classes, upsample=upsample)

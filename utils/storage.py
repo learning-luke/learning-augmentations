@@ -119,12 +119,15 @@ def save_image_batch(filename, images):
     buffer = 1
 
     output_img = np.zeros(shape=(buffer + img_w * width + buffer * width, buffer + img_h * height + buffer * height, img_c)) + 1
+    if img_c == 1:
+        output_img *= 0.5
     for i, img in enumerate(images):
         x, y = np.unravel_index(i, dims=(width, height))
         img = np.transpose(img.detach().cpu().numpy(), (1,2,0))
-        img[:,:,0] = img[:,:,0] * 0.5 + 0.5
-        img[:,:,1] = img[:,:,1] * 0.5 + 0.5
-        img[:,:,2] = img[:,:,2] * 0.5 + 0.5
+        if img_c > 1:
+            img[:,:,0] = img[:,:,0] * 0.5 + 0.5
+            img[:,:,1] = img[:,:,1] * 0.5 + 0.5
+            img[:,:,2] = img[:,:,2] * 0.5 + 0.5
         img = np.clip(img, 0, 1)
         output_img[buffer + x * (img_w + buffer): buffer + (x) * (img_w + buffer) + img_w, buffer + y * (img_h + buffer): buffer + y * (img_h + buffer) + img_h, :] = img
 
