@@ -87,6 +87,9 @@ def parse_args():
     parser.add_argument('-cut', '--learn_cutout', type=int, default=0,
                         help='Learn the correct cutout?')
 
+    parser.add_argument('-smt', '--softmax_type', type=str, default='gumbel',
+                        help='Type of softmax')
+
 
     # model
     parser.add_argument('-model', '--model', type=str, default='preact_resnet',

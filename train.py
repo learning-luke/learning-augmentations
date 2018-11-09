@@ -27,6 +27,7 @@ if debug:
     args.learn_cutout = 1
     # args.use_fc = 1
     args.upsample_type = 'nearest'
+    args.softmax_type = 'softmax'
 
 ######################################################################################################### Data
 trainloader, testloader, in_shape = load_dataset(args)
@@ -145,7 +146,7 @@ def get_secondary_targets(logits, targets):
 
 def get_loss(inputs, targets):
 
-    all_logits, before_paths, all_h, choice = net(inputs, use_input=True)
+    all_logits, before_paths, all_h, choice = net(inputs, use_input=True, softmax_type=args.softmax_type)
     logits = all_logits[0]
     logits_masked_input = all_logits[1]
 
@@ -161,6 +162,8 @@ def train(epoch):
     net.train()
     train_loss = 0
     train_loss_masked = 0
+    targeted_loss_train = 0
+    temperature_train = 0
     correct = 0
     correct_masked = 0
     total = 0
@@ -173,12 +176,15 @@ def train(epoch):
 
             train_loss += loss.item()
             train_loss_masked += loss_masked_input.item()
+            temperature_train += net.path_softmax_temperature[0].item() if device == 'cpu' else net.module.path_softmax_temperature[0].item()
 
             loss.backward(retain_graph=True)
             optimizer_c.step()
 
             optimizer_g.zero_grad()
-            (loss_masked_input - loss).backward()
+            targeted_loss = loss_masked_input#/(loss + 1e-5)
+            targeted_loss_train += targeted_loss.item()
+            (targeted_loss).backward()
             optimizer_g.step()
 
 
@@ -188,13 +194,15 @@ def train(epoch):
             correct_masked += logits_masked_input.max(1)[1].eq(targets).sum().item()
 
             current_lr = optimizer_c.param_groups[0]['lr']
-            iter_out = 'Training {};, LR: {:0.5f}, Loss: {:0.4f}, Loss_m: {:0.4f}, Acc: {:0.4f}, Acc_m: {:0.4f} '.format(
+            iter_out = 'Training {};, LR: {:0.5f}, Loss: {:0.4f}, Loss_m: {:0.4f}, Loss_target: {:0.4f}, Acc: {:0.4f}, Acc_m: {:0.4f}, T: {:0.2f}'.format(
                 batch_idx,
                 current_lr,
                 train_loss / (batch_idx + 1),
                 train_loss_masked / (batch_idx + 1),
+                targeted_loss_train / (batch_idx + 1),
                 100. * correct / total,
                 100. * correct_masked / total,
+                temperature_train / (batch_idx + 1),
             )
 
             train_pbar.set_description(iter_out)
@@ -216,6 +224,8 @@ def test(epoch):
     net.eval()
     test_loss = 0
     test_loss_masked = 0
+    targeted_loss_test = 0
+    temperature_test = 0
     correct = 0
     correct_masked = 0
     total = 0
@@ -229,16 +239,21 @@ def test(epoch):
             test_loss += loss.item()
             test_loss_masked += loss_masked_input.item()
 
+            targeted_loss = loss_masked_input #/ (loss + 1e-5)
+            targeted_loss_test += targeted_loss.item()
+            temperature_test += net.path_softmax_temperature[0].item() if device == 'cpu' else net.module.path_softmax_temperature[0].item()
 
             total += targets.size(0)
             correct += logits.max(1)[1].eq(targets).sum().item()
             correct_masked += logits_masked_input.max(1)[1].eq(targets).sum().item()
 
-            iter_out = 'Testing; Loss: {:0.4f}, Loss_m: {:0.4f}, Acc: {:0.4f}, Acc_m: {:0.4f}'.format(
+            iter_out = 'Testing; Loss: {:0.4f}, Loss_m: {:0.4f}, Loss_target: {:0.4f}, Acc: {:0.4f}, Acc_m: {:0.4f}, T: {:0.2f}'.format(
                 test_loss / (batch_idx + 1),
                 test_loss_masked / (batch_idx + 1),
+                targeted_loss_test / (batch_idx + 1),
                 100. * correct / total,
-                100. * correct_masked / total
+                100. * correct_masked / total,
+                temperature_test / (batch_idx + 1)
             )
 
             test_pbar.set_description(iter_out)
@@ -247,9 +262,8 @@ def test(epoch):
             if batch_idx == 0:
                 ordering = np.argsort(targets.detach().cpu().numpy())
                 save_image_batch("{}/test/{}_inputs.png".format(images_filepath, epoch), inputs[ordering])
-                save_image_batch("{}/train/{}_inputs.png".format(images_filepath, epoch), inputs[ordering])
-                save_image_batch("{}/train/{}_mask.png".format(images_filepath, epoch), choice[:, 0:1, :, :][ordering])
-                save_image_batch("{}/train/{}_inputs_masked.png".format(images_filepath, epoch),(inputs * choice[:, 0:1, :, :])[ordering])
+                save_image_batch("{}/test/{}_mask.png".format(images_filepath, epoch), choice[:, 0:1, :, :][ordering])
+                save_image_batch("{}/test/{}_inputs_masked.png".format(images_filepath, epoch),(inputs * choice[:, 0:1, :, :])[ordering])
 
 
     return test_loss / n_test_batches, test_loss_masked / n_test_batches, correct / total, correct_masked / total

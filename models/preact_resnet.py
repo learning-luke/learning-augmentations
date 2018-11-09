@@ -211,6 +211,8 @@ class PreActResNet(nn.Module):
                                         nn.BatchNorm2d(2),
                                         nn.Tanh())
 
+        self.path_softmax_temperature = nn.Parameter(torch.ones(1))
+
         self.in_planes = 64
         self.drop = nn.Dropout2d(self.dropout_p)
         self.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
@@ -231,7 +233,7 @@ class PreActResNet(nn.Module):
             self.in_planes = planes * block.expansion
         return nn.Sequential(*layers)
 
-    def forward(self, x, use_input=True):
+    def forward(self, x, use_input=True, softmax_type='gumbel'):
         before_paths = []
         all_h = []
         all_logits = torch.zeros((self.num_paths+1, x.size(0), self.num_classes)).to(self.device)
@@ -268,7 +270,10 @@ class PreActResNet(nn.Module):
         path1_0_up = self.path1_0_up(torch.cat((path1_0_down, path1_1_up), dim=1))
         before_paths.append(path1_0_up)
         # gumbel_softmax(logits, temperature=0.5)
-        choice = gumbel_softmax(path1_0_up, temperature=0.5)
+        if softmax_type == 'gumbel':
+            choice = gumbel_softmax(path1_0_up,temperature=self.path_softmax_temperature)
+        else:
+            choice = F.softmax(path1_0_up/self.path_softmax_temperature, dim=1)
 
         layer0_gumble = self.conv1(x*choice[:,0:1,:,:])
         layer1_gumble = self.layer1(layer0_gumble)
